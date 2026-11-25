@@ -133,3 +133,4 @@ class FailedJob(BaseModel):
 class RunResult(BaseModel):
     jobs: list[Job] = []
     failed: list[FailedJob] = []
+    known: list[str] = []  # job IDs skipped because they were already saved

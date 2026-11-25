@@ -1,6 +1,6 @@
 """The whole flow: URLs in, RunResult out.
 
-  run(urls, ...)        fetch + parse each job, then enrich it
+  run(urls, ...)        fetch + parse each new job, then enrich it (known jobs are skipped)
   enrich(jobs, ...)     the AI steps only; also used on jobs loaded from jobs.json,
                         so you can score again without re-downloading from LinkedIn
 
@@ -24,10 +24,19 @@ def run(
     extractor=None,
     scorer=None,
     on_progress: Progress = print,
+    known_ids: set[str] | frozenset[str] = frozenset(),
 ) -> RunResult:
-    """extractor: phase 4 (see llm.py). scorer: phase 5 (see scoring.py). None = skip."""
+    """extractor: phase 4 (see llm.py). scorer: phase 5 (see scoring.py). None = skip.
+
+    known_ids: jobs you already have (e.g. from jobs.json). They're skipped, so you can keep
+    appending to urls.txt without re-downloading or re-paying the AI for old links.
+    """
     targets, skipped = parse_urls(urls)
     result = RunResult(failed=[FailedJob(url=u, error="no LinkedIn job ID in URL") for u in skipped])
+    result.known = [job_id for _, job_id in targets if job_id in known_ids]
+    targets = [(url, job_id) for url, job_id in targets if job_id not in known_ids]
+    if result.known:
+        on_progress(f"{len(result.known)} job(s) already saved, skipped (use --refresh to fetch them again)")
     fetcher = fetcher or make_fetcher(fetcher_name)  # pass your own to test or to plug in a new source
 
     on_progress(f"{len(targets)} job(s) to fetch")
@@ -47,11 +56,24 @@ def run(
     return result
 
 
-def enrich(jobs: list[Job], extractor=None, scorer=None, on_progress: Progress = print) -> list[Job]:
-    """Run the AI steps on jobs you already have (e.g. loaded from jobs.json)."""
-    for i, job in enumerate(jobs, 1):
-        on_progress(f"[{i}/{len(jobs)}] {job.title} @ {job.company}")
-        enrich_one(job, extractor, scorer, on_progress)
+def enrich(jobs: list[Job], extractor=None, scorer=None, on_progress: Progress = print,
+           only_missing: bool = False) -> list[Job]:
+    """Run the AI steps on jobs you already have (e.g. loaded from jobs.json).
+
+    only_missing=True skips a step for a job that already has its result (insights or fit),
+    so you only pay for jobs that need it.
+    """
+    todo = []
+    for job in jobs:
+        ext = None if only_missing and job.insights else extractor
+        sco = None if only_missing and job.fit else scorer
+        if ext is not None or sco is not None:
+            todo.append((job, ext, sco))
+    if only_missing and len(todo) < len(jobs):
+        on_progress(f"{len(jobs) - len(todo)} job(s) already done, skipped (use --refresh to redo them)")
+    for i, (job, ext, sco) in enumerate(todo, 1):
+        on_progress(f"[{i}/{len(todo)}] {job.title} @ {job.company}")
+        enrich_one(job, ext, sco, on_progress)
     return jobs
 
 

@@ -28,7 +28,7 @@ cp .env.example .env
 **3. Check it works:**
 
 ```bash
-uv run pytest      # should say "17 passed"
+uv run pytest      # should say "20 passed"
 ```
 
 **4. Add some jobs and run it.** Open `urls.txt`, paste 3 to 5 LinkedIn job links (one per
@@ -106,6 +106,15 @@ uv run job-tracker --from-json --score --sheet
 ```
 
    Or score while adding new jobs: `uv run job-tracker urls.txt --sheet --ai --score`.
+
+**Adding more jobs later.** Keep appending links to `urls.txt` and run the same command.
+Jobs already in `jobs.json` are skipped (no LinkedIn request, no AI cost), and
+`--from-json --ai --score` only runs the steps a saved job doesn't have yet. To redo jobs
+you already have (for example after changing your master resume), add `--refresh`:
+
+```bash
+uv run job-tracker --from-json --score --sheet --refresh    # re-score every saved job
+```
 
 This suggests `fit_score`, `key_strengths` and `key_gaps` (only where those cells are
 empty, so clear a cell to get a fresh suggestion) and fills `recommendation`

@@ -1,8 +1,10 @@
 """Command line entry point.
 
   uv run job-tracker urls.txt                      fetch new jobs -> jobs.json + jobs.csv
+                                                   (jobs already in jobs.json are skipped)
   uv run job-tracker urls.txt --sheet --ai --score  ...plus Google Sheet, AI fields, fit scores
-  uv run job-tracker --from-json --score --sheet    re-run AI steps on saved jobs (no LinkedIn)
+  uv run job-tracker --from-json --score --sheet    AI steps for saved jobs that don't have them yet
+  add --refresh to any of these to redo jobs you already have
   uv run job-tracker --tailor 4492071444 --sheet    tailored PDF resume for a saved job
 """
 import argparse
@@ -65,6 +67,8 @@ def main():
     ap.add_argument("--fetcher", help="direct | scraperapi (default: FETCHER in .env)")
     ap.add_argument("--ai", action="store_true", help="phase 4: LLM reads each description (uses API credit)")
     ap.add_argument("--score", action="store_true", help="phase 5: LLM scores fit vs your profile/ (uses API credit)")
+    ap.add_argument("--refresh", action="store_true",
+                    help="redo jobs you already have: re-fetch them, and re-run --ai/--score on them")
     ap.add_argument("--profile", default="profile", help="folder with master_resume.md etc.")
     ap.add_argument("--tailor", nargs="+", metavar="JOB_ID",
                     help="phase 6: tailored PDF resume for these saved jobs (uses API credit)")
@@ -85,11 +89,19 @@ def main():
 
         scorer = make_scorer(args.profile)
 
+    saved = load_json(args.out)
     if args.from_json:
-        jobs, failed = enrich(load_json(args.out), extractor, scorer), []
+        jobs, failed = enrich(saved, extractor, scorer, only_missing=not args.refresh), []
     else:
-        result = run(read_url_file(args.urls_file), args.fetcher, extractor=extractor, scorer=scorer)
+        known = set() if args.refresh else {j.job_id for j in saved}
+        result = run(read_url_file(args.urls_file), args.fetcher, extractor=extractor, scorer=scorer,
+                     known_ids=known)
         jobs, failed = result.jobs, result.failed
+        if result.known and (extractor or scorer):
+            print("  tip: to add AI columns to saved jobs that lack them: --from-json --ai --score")
+        if not jobs:
+            print("Nothing new to save.")
+            return report_failed(failed)
 
     total = save_json(jobs, args.out)
     print(f"JSON: {len(jobs)} job(s) saved, {total} in {args.out}")
@@ -102,6 +114,10 @@ def main():
         )
     if scorer is not None and scorer.cache_reads:
         print(f"Prompt cache: {scorer.cache_reads:,} resume tokens read from cache (billed at ~5%)")
+    report_failed(failed)
+
+
+def report_failed(failed) -> None:
     if failed:
         print(f"\n{len(failed)} failed:")
         for f_ in failed:

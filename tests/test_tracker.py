@@ -73,6 +73,45 @@ def test_pipeline_end_to_end_with_fake_fetcher():
     assert len(result.failed) == 2
 
 
+def test_run_skips_known_jobs():
+    from job_tracker import run
+
+    fetched = []
+
+    class FakeFetcher:
+        def fetch(self, job_id):
+            fetched.append(job_id)
+            return SAMPLE.read_text(encoding="utf-8")
+
+    result = run(
+        ["https://www.linkedin.com/jobs/view/111111111/", "https://www.linkedin.com/jobs/view/222222222/"],
+        fetcher=FakeFetcher(), on_progress=lambda _: None, known_ids={"111111111"},
+    )
+    assert fetched == ["222222222"]
+    assert result.known == ["111111111"]
+    assert [j.job_id for j in result.jobs] == ["222222222"]
+
+
+def test_enrich_only_missing_skips_done_steps():
+    from job_tracker.models import JobInsights
+    from job_tracker.pipeline import enrich
+
+    calls = []
+
+    class FakeExtractor:
+        def extract(self, job):
+            calls.append(job.job_id)
+            raise RuntimeError("stop here")  # enrich_one keeps the job; we only count calls
+
+    done = Job(job_id="1", url="u")
+    done.insights = JobInsights.model_construct(summary="already extracted")
+    todo = Job(job_id="2", url="u")
+    enrich([done, todo], FakeExtractor(), on_progress=lambda _: None, only_missing=True)
+    assert calls == ["2"]
+    enrich([done, todo], FakeExtractor(), on_progress=lambda _: None)
+    assert calls == ["2", "1", "2"]
+
+
 def test_old_csv_gains_new_columns_and_keeps_everything(tmp_path):
     """A CSV from before the new columns existed, with a user-added column, upgrades cleanly."""
     path = tmp_path / "jobs.csv"
