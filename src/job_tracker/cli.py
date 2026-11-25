@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pydantic import ValidationError
 
 from .models import Job
 from .pipeline import enrich, run
@@ -21,7 +22,23 @@ def load_json(path: str) -> list[Job]:
     p = Path(path)
     if not p.exists():
         return []
-    return [Job.model_validate(d) for d in json.loads(p.read_text(encoding="utf-8"))]
+    return [_load_job(d) for d in json.loads(p.read_text(encoding="utf-8"))]
+
+
+def _load_job(data: dict) -> Job:
+    """Load one saved job, coping with files written by an older version of the tool.
+
+    When we add fields to the AI outputs (e.g. tailoring_benefit), older saved results
+    no longer match the model. They're only cached AI output, so we drop the stale
+    part and the next --ai / --score run regenerates it. (This is "schema migration".)
+    """
+    try:
+        return Job.model_validate(data)
+    except ValidationError:
+        stale = [k for k in ("fit", "insights") if data.get(k) is not None]
+        job = Job.model_validate({**data, **dict.fromkeys(stale)})
+        print(f"  note: job {job.job_id} has old-format {' and '.join(stale)}; run --score/--ai to refresh")
+        return job
 
 
 def save_json(jobs: list[Job], path: str) -> int:

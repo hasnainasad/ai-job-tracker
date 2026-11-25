@@ -175,6 +175,7 @@ def _fit(**kw):
         "key_strengths": ["React/TypeScript at HSBC", "Micro frontends"], "key_gaps": ["AG Grid"],
         "best_template": "B", "template_reason": "Fintech product role.",
         "recommendation": "Apply", "reasoning": "Strong frontend match.",
+        "tailoring_benefit": "Medium", "tailoring_tips": ["Lead with data-grid work", "Name WebSockets"],
     }
     base.update(kw)
     return FitAssessment(**base)
@@ -199,6 +200,8 @@ def test_scoring_fills_empty_user_columns_only(tmp_path):
     assert rows["1"]["fit_score"] == "55" and rows["1"]["key_gaps"] == "my own gap note"  # yours win
     assert rows["2"]["fit_score"] == "78" and rows["2"]["recommendation"] == "Apply"
     assert rows["2"]["best_template"] == "B"
+    assert rows["2"]["tailoring_benefit"] == "Medium"
+    assert rows["2"]["tailoring_tips"] == "Lead with data-grid work; Name WebSockets"
 
 
 def test_load_profile_ignores_comment_only_preferences(tmp_path):
@@ -220,3 +223,15 @@ def test_json_merge_keeps_old_jobs(tmp_path):
     total = save_json([Job(job_id="2", url="u", title="B"), Job(job_id="1", url="u", title="A2")], path)
     jobs = {j.job_id: j for j in load_json(path)}
     assert total == 2 and jobs["1"].title == "A2"
+
+
+def test_load_json_drops_old_format_fit(tmp_path):
+    import json
+
+    from job_tracker.cli import load_json
+
+    old_fit = {k: v for k, v in _fit().model_dump().items() if not k.startswith("tailoring")}
+    path = tmp_path / "jobs.json"
+    path.write_text(json.dumps([{"job_id": "1", "url": "u", "title": "FE", "fit_score": "78", "fit": old_fit}]))
+    job = load_json(str(path))[0]
+    assert job.fit is None and job.fit_score == "78" and job.title == "FE"

@@ -109,7 +109,8 @@ uv run job-tracker --from-json --score --sheet
 
 This suggests `fit_score`, `key_strengths` and `key_gaps` (only where those cells are
 empty, so clear a cell to get a fresh suggestion) and fills `recommendation`
-(Apply / Maybe / Skip), `best_template` (A-E) and `fit_reasoning`. Your resume is sent
+(Apply / Maybe / Skip), `best_template` (A-E), `tailoring_benefit` (High / Medium / Low:
+would a tailored resume help beyond that template?), `tailoring_tips` and `fit_reasoning`. Your resume is sent
 with a prompt-cache marker, so after the first job it's read from cache at a fraction of
 the price; the run ends by printing how many tokens came from cache. Cost: roughly 2 to 5
 cents per job on `claude-opus-5-5`.

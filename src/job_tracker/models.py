@@ -39,6 +39,14 @@ class FitAssessment(BaseModel):
     template_reason: str = Field(description="One sentence: why that template.")
     recommendation: str = Field(description='"Apply", "Maybe" or "Skip".')
     reasoning: str = Field(description="One or two sentences explaining the overall score.")
+    tailoring_benefit: str = Field(
+        description='"High", "Medium" or "Low": how much a resume tailored to this job would help '
+        "compared with sending the best template as it is."
+    )
+    tailoring_tips: list[str] = Field(
+        description="2-3 specific changes to make when tailoring, using only facts already in the resume. "
+        "Empty if tailoring_benefit is Low."
+    )
 
 
 class Job(BaseModel):

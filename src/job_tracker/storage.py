@@ -18,7 +18,7 @@ USER_COLUMNS = [
 ]
 # Phase 5 (--score): the LLM's judgement of fit (fit_score/key_strengths/key_gaps are
 # suggestions written into YOUR columns above, only where they're empty).
-SCORE_COLUMNS = ["recommendation", "best_template", "fit_reasoning"]
+SCORE_COLUMNS = ["recommendation", "best_template", "tailoring_benefit", "tailoring_tips", "fit_reasoning"]
 # Phase 4 (--ai): read from the description by the LLM.
 AI_COLUMNS = [
     "must_have_skills", "nice_to_have_skills", "visa_sponsorship", "ai_summary",
@@ -45,6 +45,8 @@ def _as_dict(job: Job) -> dict[str, str]:
     if job.fit:
         d["recommendation"] = job.fit.recommendation
         d["best_template"] = job.fit.best_template
+        d["tailoring_benefit"] = job.fit.tailoring_benefit
+        d["tailoring_tips"] = "; ".join(job.fit.tailoring_tips)
         d["fit_reasoning"] = f"{job.fit.reasoning} Template: {job.fit.template_reason}"
     if job.insights:  # flatten the nested insights into plain columns
         ins = job.insights.model_dump()

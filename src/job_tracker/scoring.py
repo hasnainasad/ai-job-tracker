@@ -35,7 +35,13 @@ Rules:
 - key_strengths and key_gaps: short, specific, at most 3 each; cite the evidence
   (e.g. "Led MUI adoption across 6 micro-frontends at HSBC").
 - best_template: choose the template (A-E) whose angle best matches what this job
-  emphasises."""
+  emphasises.
+- tailoring_benefit: "High" if the resume has strong evidence for this job that the
+  best template doesn't put up front (so reordering/rewording would clearly help),
+  "Medium" if a few tweaks would help, "Low" if the template already fits well.
+- tailoring_tips: concrete edits to that template, e.g. which experience to move up,
+  which of the job's keywords to use for things the candidate has really done.
+  Never suggest claiming skills or experience the resume doesn't show."""
 
 
 @dataclass

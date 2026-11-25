@@ -6,6 +6,7 @@ Things we've agreed to do later. Newest first within each section.
 
 | # | Item | Why | Added |
 | --- | --- | --- | --- |
+| 7 | **Tracing for LLM calls and agents** (e.g. Langfuse, LangSmith or OpenTelemetry): see every prompt, response, token count and cost per run | Agreed to add alongside the agents in phase 7. Until then: `ANTHROPIC_LOG=debug` before a command, or the Usage page on platform.claude.com | 2026-11-25 |
 | 1 | **Skip jobs already in `jobs.json` by default**, with a `--refresh` flag to force a re-fetch | Lets you keep appending to `urls.txt`; today every run re-fetches (and re-pays AI for) every link in the file | 2026-11-25 |
 | 2 | **Keep the Google Sheet's own column order**, adding only brand-new columns at the end | Today each run rewrites the sheet in the code's `COLUMNS` order, undoing columns you drag in Sheets | 2026-11-25 |
 | 3 | **`--rescore` flag**: refresh AI suggestions in `fit_score` / `key_strengths` / `key_gaps` while keeping cells you typed yourself | Today those are your columns, so a re-run never updates them; makes the eval loop easier | 2026-11-25 |

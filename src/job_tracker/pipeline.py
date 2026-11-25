@@ -78,4 +78,7 @@ def enrich_one(job: Job, extractor, scorer, on_progress: Progress) -> None:
             job.fit_score = str(job.fit.fit_score)
             job.key_strengths = "; ".join(job.fit.key_strengths)
             job.key_gaps = "; ".join(job.fit.key_gaps)
-            on_progress(f"  fit: {job.fit.fit_score} -> {job.fit.recommendation} (template {job.fit.best_template})")
+            on_progress(
+                f"  fit: {job.fit.fit_score} -> {job.fit.recommendation} "
+                f"(template {job.fit.best_template}, tailoring benefit: {job.fit.tailoring_benefit})"
+            )
