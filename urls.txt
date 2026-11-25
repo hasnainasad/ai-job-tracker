@@ -1,0 +1,6 @@
+# One LinkedIn job URL per line. Lines starting with # are ignored.
+# All of these shapes work:
+# https://www.linkedin.com/jobs/view/4012345678/
+# https://www.linkedin.com/jobs/view/senior-ml-engineer-at-acme-4012345678
+# https://www.linkedin.com/jobs/search/?currentJobId=4012345678&keywords=ml
+

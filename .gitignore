@@ -1,0 +1,9 @@
+.env
+service_account.json
+jobs.json
+jobs.csv
+__pycache__/
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
