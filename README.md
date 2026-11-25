@@ -3,7 +3,7 @@
 Paste LinkedIn job links, get a clean tracker of those jobs (JSON, CSV and a Google Sheet).
 Later phases add LLM fit scoring, resume tailoring, and a React + FastAPI app with agents.
 
-**Status:** phases 0 to 3 built and working against live LinkedIn (first run: 5 of 5 jobs).
+**Status:** phases 0 to 3 working against live LinkedIn and Google Sheets. Phase 4 (AI extraction) built, waiting for its first live run.
 
 ---
 
@@ -28,7 +28,7 @@ cp .env.example .env
 **3. Check it works:**
 
 ```bash
-uv run pytest      # should say "7 passed"
+uv run pytest      # should say "9 passed"
 ```
 
 **4. Add some jobs and run it.** Open `urls.txt`, paste 3 to 5 LinkedIn job links (one per
@@ -78,6 +78,23 @@ uv run job-tracker urls.txt --sheet
 
 A `Jobs` tab appears with a header row and one row per job.
 
+**6. Let an LLM read the descriptions (phase 4, optional).** This fills extra columns:
+remote policy, office days, years of experience, must-have and nice-to-have skills, visa
+sponsorship, a one-line summary, and the salary when it's only in the job title.
+
+1. Create an API key at [platform.claude.com](https://platform.claude.com) and add a few
+   dollars of credit. (The API is billed separately from a Claude Pro/Max subscription.)
+2. Put it in `.env` as `ANTHROPIC_API_KEY=...`.
+3. Run with `--ai`:
+
+```bash
+uv run job-tracker urls.txt --sheet --ai
+```
+
+Cost: about $0.014 per job on `claude-opus-5-5` (the default), or about $0.0004 per job
+if you set `LLM_MODEL=claude-haiku-5-5` in `.env`. Runs without `--ai` keep the AI columns
+you already have.
+
 ---
 
 ## Level 2: How it works (intermediate)
@@ -96,6 +113,7 @@ urls.txt ──► urls.py ──► fetchers.py ──► extract.py ──► 
 | `src/job_tracker/extract.py` | Reads title, company, location, seniority, description... out of the HTML | CSS selectors with BeautifulSoup |
 | `src/job_tracker/models.py` | Defines what a `Job` is | Pydantic models (validation, JSON) |
 | `src/job_tracker/storage.py` | Writes to CSV and Google Sheets; matches rows by `job_id` and columns by header name, never overwrites your columns | Idempotent writes, Sheets API via `gspread` |
+| `src/job_tracker/llm.py` | Phase 4: sends each description to Claude and gets back a validated `JobInsights` | Structured outputs, prompt rules against guessing, API error handling |
 | `src/job_tracker/pipeline.py` | `run(urls)` glues it all together and returns a `RunResult` | Separating logic from interface |
 | `src/job_tracker/cli.py` | The `job-tracker` command | `argparse`, entry points |
 

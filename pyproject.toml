@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2.7",
     "python-dotenv>=1.0",
     "gspread>=6.0",
+    "anthropic>=2.14",
 ]
 
 [project.scripts]

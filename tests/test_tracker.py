@@ -104,3 +104,64 @@ def test_merge_user_columns_win_scraped_columns_refresh():
     assert by_id["1"]["key_gaps"] == "Kubernetes" and by_id["1"]["date_applied"] == "2026-11-20"
     assert by_id["1"]["status"] == "To review"   # empty before, so the default fills it
     assert by_id["2"]["status"] == "To review"
+
+
+def _insights(**kw):
+    from job_tracker.models import JobInsights
+
+    base = {
+        "salary_text": "", "salary_min": None, "salary_max": None, "salary_currency": "",
+        "remote_policy": "Hybrid", "office_days_per_week": 3, "years_experience_min": 5,
+        "must_have_skills": ["React", "TypeScript"], "nice_to_have_skills": ["AG Grid"],
+        "visa_sponsorship": "Not stated", "summary": "Front-end role on a trading team.",
+    }
+    base.update(kw)
+    return JobInsights(**base)
+
+
+def test_ai_extraction_fills_columns_and_salary_from_title(tmp_path):
+    from job_tracker import run
+
+    class FakeFetcher:
+        def fetch(self, job_id):
+            return SAMPLE.read_text(encoding="utf-8")
+
+    class FakeLLM:
+        def extract(self, job):
+            return _insights(salary_text="£150k-£200k + bonus", salary_min=150000)
+
+    result = run(["https://www.linkedin.com/jobs/view/4012345678/"],
+                 fetcher=FakeFetcher(), extractor=FakeLLM(), on_progress=lambda _: None)
+    job = result.jobs[0]
+    assert job.salary == "£150k-£200k + bonus"          # filled from the AI because the page had none
+    assert job.insights.must_have_skills == ["React", "TypeScript"]
+
+    path = tmp_path / "jobs.csv"
+    save_to_csv(result.jobs, str(path))
+    with open(path, newline="") as f:
+        row = next(csv.DictReader(f))
+    assert row["must_have_skills"] == "React, TypeScript"
+    assert row["remote_policy"] == "Hybrid" and row["office_days_per_week"] == "3"
+    assert row["ai_summary"].startswith("Front-end")
+
+    # A later run WITHOUT --ai must not wipe the AI columns.
+    save_to_csv([Job(job_id="4012345678", url="u", title="Machine Learning Engineer")], str(path))
+    with open(path, newline="") as f:
+        row = next(csv.DictReader(f))
+    assert row["must_have_skills"] == "React, TypeScript"
+
+
+def test_ai_failure_keeps_the_job():
+    from job_tracker import run
+
+    class FakeFetcher:
+        def fetch(self, job_id):
+            return SAMPLE.read_text(encoding="utf-8")
+
+    class BrokenLLM:
+        def extract(self, job):
+            raise RuntimeError("no credit")
+
+    result = run(["https://www.linkedin.com/jobs/view/4012345678/"],
+                 fetcher=FakeFetcher(), extractor=BrokenLLM(), on_progress=lambda _: None)
+    assert len(result.jobs) == 1 and result.jobs[0].insights is None

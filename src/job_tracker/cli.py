@@ -18,9 +18,15 @@ def main():
     ap.add_argument("--csv", default="jobs.csv")
     ap.add_argument("--sheet", action="store_true", help="also write to your Google Sheet")
     ap.add_argument("--fetcher", help="direct | scraperapi (default: FETCHER in .env)")
+    ap.add_argument("--ai", action="store_true", help="phase 4: LLM reads each description (uses API credit)")
     args = ap.parse_args()
 
-    result = run(read_url_file(args.urls_file), args.fetcher)
+    extractor = None
+    if args.ai:
+        from .llm import make_extractor
+
+        extractor = make_extractor()
+    result = run(read_url_file(args.urls_file), args.fetcher, extractor=extractor)
 
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump([j.model_dump(mode="json") for j in result.jobs], f, indent=2, ensure_ascii=False)

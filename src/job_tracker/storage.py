@@ -16,17 +16,34 @@ USER_COLUMNS = [
     "status", "status_note", "date_applied", "resume_status",
     "fit_score", "key_strengths", "key_gaps", "notes",
 ]
+# Phase 4 (--ai): read from the description by the LLM.
+AI_COLUMNS = [
+    "remote_policy", "office_days_per_week", "years_experience_min",
+    "must_have_skills", "nice_to_have_skills", "visa_sponsorship", "ai_summary",
+]
 SCRAPED_COLUMNS = [
     "posted", "applicants", "seniority", "employment_type", "job_function",
-    "industries", "salary", "url", "scraped_at", "description",
+    "industries", "url", "scraped_at", "description",
 ]
-COLUMNS = ["job_id", "title", "company", "location", *USER_COLUMNS, *SCRAPED_COLUMNS]
+COLUMNS = ["job_id", "title", "company", "location", "salary", *USER_COLUMNS, *AI_COLUMNS, *SCRAPED_COLUMNS]
 CELL_LIMIT = 49000  # Google Sheets max is 50,000 characters per cell
 
 
+def _cell(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
+
 def _as_dict(job: Job) -> dict[str, str]:
-    d = job.model_dump(mode="json")
-    return {c: str(d.get(c, "") or "")[:CELL_LIMIT] for c in COLUMNS}
+    d = job.model_dump(mode="json", exclude={"insights"})
+    if job.insights:  # flatten the nested insights into plain columns
+        ins = job.insights.model_dump()
+        ins["ai_summary"] = ins.pop("summary")
+        d.update({k: v for k, v in ins.items() if k in AI_COLUMNS})
+    return {c: _cell(d.get(c))[:CELL_LIMIT] for c in COLUMNS}
 
 
 def merge(existing: dict[str, dict[str, str]], jobs: list[Job], header: list[str]) -> list[dict]:
@@ -41,6 +58,9 @@ def merge(existing: dict[str, dict[str, str]], jobs: list[Job], header: list[str
         old = rows.get(job.job_id, {})
         for c in USER_COLUMNS:
             if old.get(c):          # you've typed something: yours wins
+                fresh[c] = old[c]
+        for c, v in list(fresh.items()):
+            if not v and old.get(c):  # e.g. a run without --ai keeps earlier AI columns
                 fresh[c] = old[c]
         rows[job.job_id] = {**old, **fresh}
     return [{c: r.get(c, "") for c in header} for r in rows.values()]
