@@ -71,3 +71,36 @@ def test_pipeline_end_to_end_with_fake_fetcher():
     )
     assert [j.job_id for j in result.jobs] == ["4012345678"]
     assert len(result.failed) == 2
+
+
+def test_old_csv_gains_new_columns_and_keeps_everything(tmp_path):
+    """A CSV from before the new columns existed, with a user-added column, upgrades cleanly."""
+    path = tmp_path / "jobs.csv"
+    path.write_text(
+        "job_id,title,status,notes,my_column,description\n"
+        "1,Old title,Applied,great team,keep me,old desc\n",
+        encoding="utf-8",
+    )
+    save_to_csv([Job(job_id="1", url="u", title="New title", description="new desc")], str(path))
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        header = reader.fieldnames
+        row = next(reader)
+    for col in ["date_applied", "status_note", "key_strengths", "key_gaps", "resume_status"]:
+        assert col in header
+    assert header[-1] == "my_column"
+    assert row["title"] == "New title" and row["description"] == "new desc"
+    assert row["status"] == "Applied" and row["notes"] == "great team"
+    assert row["my_column"] == "keep me"
+
+
+def test_merge_user_columns_win_scraped_columns_refresh():
+    from job_tracker.storage import COLUMNS, merge
+
+    existing = {"1": {"job_id": "1", "title": "Old", "key_gaps": "Kubernetes", "date_applied": "2026-11-20"}}
+    rows = merge(existing, [Job(job_id="1", url="u", title="New"), Job(job_id="2", url="u2")], COLUMNS)
+    by_id = {r["job_id"]: r for r in rows}
+    assert by_id["1"]["title"] == "New"
+    assert by_id["1"]["key_gaps"] == "Kubernetes" and by_id["1"]["date_applied"] == "2026-11-20"
+    assert by_id["1"]["status"] == "To review"   # empty before, so the default fills it
+    assert by_id["2"]["status"] == "To review"

@@ -3,8 +3,7 @@
 Paste LinkedIn job links, get a clean tracker of those jobs (JSON, CSV and a Google Sheet).
 Later phases add LLM fit scoring, resume tailoring, and a React + FastAPI app with agents.
 
-**Status:** phases 0 to 3 built. Tests pass on a saved sample page; not yet tried against
-live LinkedIn (that first real run is yours, see step 4 below).
+**Status:** phases 0 to 3 built and working against live LinkedIn (first run: 5 of 5 jobs).
 
 ---
 
@@ -29,7 +28,7 @@ cp .env.example .env
 **3. Check it works:**
 
 ```bash
-uv run pytest      # should say "5 passed"
+uv run pytest      # should say "7 passed"
 ```
 
 **4. Add some jobs and run it.** Open `urls.txt`, paste 3 to 5 LinkedIn job links (one per
@@ -40,8 +39,24 @@ uv run job-tracker urls.txt
 ```
 
 You get `jobs.json` (all fields) and `jobs.csv` (open it in Excel). Run it again any time:
-jobs are matched by ID, so nothing duplicates, and anything you type in the `status`,
-`fit_score` or `notes` columns of the CSV is kept.
+jobs are matched by ID, so nothing duplicates.
+
+**Your tracker columns.** These are yours to fill in, in the CSV or Google Sheet (and in
+the web UI later). Once a cell has a value the tool never overwrites it:
+
+| Column | What to put in it |
+| --- | --- |
+| `status` | To review (default), Applying, Applied, Interview, Offer, Rejected |
+| `status_note` | Short update, e.g. "Recruiter call Fri 2pm" |
+| `date_applied` | `YYYY-MM-DD`, e.g. 2026-11-25 |
+| `resume_status` | Not started, Tailored, Sent |
+| `fit_score` | 0 to 100 (phase 5 will suggest one) |
+| `key_strengths` | Where you match the job (phase 5 will suggest these) |
+| `key_gaps` | What the job wants that you lack (phase 5 will suggest these) |
+| `notes` | Anything else |
+
+You can also add your own columns or reorder them; the tool matches columns by header
+name and keeps anything it doesn't recognise at the end.
 
 **5. Send it to Google Sheets** (one-time setup, about 10 minutes):
 
@@ -80,7 +95,7 @@ urls.txt ──► urls.py ──► fetchers.py ──► extract.py ──► 
 | `src/job_tracker/fetchers.py` | Downloads the job page from LinkedIn's public guest endpoint, slowly, with retries | HTTP, rate limits (HTTP 429), back-off |
 | `src/job_tracker/extract.py` | Reads title, company, location, seniority, description... out of the HTML | CSS selectors with BeautifulSoup |
 | `src/job_tracker/models.py` | Defines what a `Job` is | Pydantic models (validation, JSON) |
-| `src/job_tracker/storage.py` | Writes to CSV and Google Sheets; updates rows by `job_id` and never overwrites your columns | Idempotent writes, Sheets API via `gspread` |
+| `src/job_tracker/storage.py` | Writes to CSV and Google Sheets; matches rows by `job_id` and columns by header name, never overwrites your columns | Idempotent writes, Sheets API via `gspread` |
 | `src/job_tracker/pipeline.py` | `run(urls)` glues it all together and returns a `RunResult` | Separating logic from interface |
 | `src/job_tracker/cli.py` | The `job-tracker` command | `argparse`, entry points |
 
