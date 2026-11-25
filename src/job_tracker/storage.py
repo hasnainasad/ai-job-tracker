@@ -18,7 +18,8 @@ USER_COLUMNS = [
 ]
 # Phase 5 (--score): the LLM's judgement of fit (fit_score/key_strengths/key_gaps are
 # suggestions written into YOUR columns above, only where they're empty).
-SCORE_COLUMNS = ["recommendation", "best_template", "tailoring_benefit", "tailoring_tips", "fit_reasoning"]
+SCORE_COLUMNS = ["recommendation", "best_template", "tailoring_benefit", "tailoring_tips", "fit_reasoning",
+                 "resume_file"]  # resume_file: phase 6 (--tailor)
 # Phase 4 (--ai): read from the description by the LLM.
 AI_COLUMNS = [
     "must_have_skills", "nice_to_have_skills", "visa_sponsorship", "ai_summary",

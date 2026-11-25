@@ -8,3 +8,5 @@ resume never reaches GitHub.
 - `templates.md`: one `## X: Name` section per resume version, with its headline and
   summary. Scoring picks the best one per job.
 - `preferences.md`: optional, plain English. Lines starting with `#` are ignored.
+- `templates/A.md` ... `templates/E.md`: full text of each resume version, used as the
+  starting point for tailoring (phase 6).

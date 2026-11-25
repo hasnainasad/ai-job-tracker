@@ -49,6 +49,51 @@ class FitAssessment(BaseModel):
     )
 
 
+class SourcedBullet(BaseModel):
+    text: str = Field(description="The bullet as it should appear on the tailored resume.")
+    source: str = Field(
+        description="An exact, word-for-word quote (at least 6 words) from the MASTER resume that "
+        "supports this bullet."
+    )
+
+
+class RoleEntry(BaseModel):
+    title: str
+    company: str
+    dates: str = Field(description="Exactly as in the master resume.")
+    location: str
+    bullets: list[SourcedBullet]
+
+
+class SkillGroup(BaseModel):
+    category: str
+    items: list[str]
+
+
+class TailoredResume(BaseModel):
+    """Phase 6: a resume tailored to one job. Name and contact details are NOT here:
+    they're copied from your master resume by code, so the LLM can't get them wrong."""
+    headline: str = Field(description='Role titles separated by " | ", like the templates.')
+    summary: str
+    core_competencies: list[str]
+    career_highlights: list[SourcedBullet]
+    experience: list[RoleEntry]
+    education: list[str]
+    technical_skills: list[SkillGroup]
+    change_log: list[str] = Field(description="What you changed from the starting template, and why, one line each.")
+
+
+class UnsupportedClaim(BaseModel):
+    claim: str = Field(description="The words on the tailored resume.")
+    reason: str = Field(description="Why the master resume doesn't support it.")
+
+
+class Verification(BaseModel):
+    unsupported_claims: list[UnsupportedClaim] = Field(
+        description="Every claim not supported by the master resume. Empty list if all are supported."
+    )
+
+
 class Job(BaseModel):
     job_id: str
     url: str
@@ -77,6 +122,7 @@ class Job(BaseModel):
     key_strengths: str = ""       # where you match the job well
     key_gaps: str = ""            # what the job wants that you lack
     notes: str = ""
+    resume_file: str = ""  # phase 6: path of the last tailored resume PDF
 
 
 class FailedJob(BaseModel):

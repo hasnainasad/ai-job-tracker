@@ -8,6 +8,8 @@ anything with an .extract(job) -> JobInsights method works. Pick one in .env:
 """
 import os
 
+from pydantic import ValidationError
+
 from .models import Job, JobInsights
 
 SYSTEM_PROMPT = """You extract facts from job postings for a job seeker's tracker.
@@ -66,6 +68,8 @@ class AnthropicExtractor:
                 output_config={"effort": self.effort},
                 output_format=JobInsights,
             )
+        except ValidationError as e:  # answer stopped mid-JSON (ran out of tokens)
+            raise LLMError("the answer was cut off before it finished") from e
         except a.AuthenticationError as e:
             raise LLMError("ANTHROPIC_API_KEY is missing or wrong (check .env)") from e
         except a.RateLimitError as e:

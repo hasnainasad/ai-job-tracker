@@ -235,3 +235,110 @@ def test_load_json_drops_old_format_fit(tmp_path):
     path.write_text(json.dumps([{"job_id": "1", "url": "u", "title": "FE", "fit_score": "78", "fit": old_fit}]))
     job = load_json(str(path))[0]
     assert job.fit is None and job.fit_score == "78" and job.title == "FE"
+
+
+# ---- Phase 6: tailoring -------------------------------------------------------
+
+MASTER = """Jane Doe
+Engineering Lead | Frontend Architect
+Leeds, UK | jane@example.com | linkedin.com/in/janedoe
+
+PROFESSIONAL EXPERIENCE
+Engineering Lead | Acme Bank | 2020 - 2025 | Leeds
+ • Led migration of 4 micro-frontend apps to a shared design system, cutting UI effort by
+   ~15% for a 6-person team.
+ • Mentored three engineers on React, TypeScript and testing practice.
+EDUCATION
+BSc Computer Science | University of Leeds | 2008 - 2011
+"""
+
+
+def _tailored(**kw):
+    from job_tracker.models import RoleEntry, SkillGroup, SourcedBullet, TailoredResume
+
+    b1 = SourcedBullet(text="Led a 4-app micro-frontend move to a shared design system (~15% less UI effort).",
+                       source="Led migration of 4 micro-frontend apps to a shared design system")
+    b2 = SourcedBullet(text="Mentored three engineers in React and TypeScript.",
+                       source="Mentored three engineers on React, TypeScript and testing practice.")
+    base = {
+        "headline": "Engineering Lead | Frontend Architect", "summary": "Frontend lead.",
+        "core_competencies": ["React", "TypeScript"], "career_highlights": [b1],
+        "experience": [RoleEntry(title="Engineering Lead", company="Acme Bank", dates="2020 - 2025",
+                                 location="Leeds", bullets=[b1, b2])],
+        "education": ["BSc Computer Science | University of Leeds | 2008 - 2011"],
+        "technical_skills": [SkillGroup(category="Frontend", items=["React", "TypeScript"])],
+        "change_log": ["Moved design-system work to the top"],
+    }
+    base.update(kw)
+    return TailoredResume(**base)
+
+
+def test_check_against_master_passes_clean_resume():
+    from job_tracker.tailor import check_against_master
+
+    assert check_against_master(_tailored(), MASTER) == []
+
+
+def test_check_against_master_catches_invented_source_and_numbers():
+    from job_tracker.models import SourcedBullet
+    from job_tracker.tailor import check_against_master
+
+    fake = SourcedBullet(text="Cut cloud costs by 40% across 12 teams.", source="Cut cloud costs by 40% across 12 teams")
+    warnings = check_against_master(_tailored(career_highlights=[fake]), MASTER)
+    assert any("Source quote not found" in w for w in warnings)
+    assert any('"40"' in w for w in warnings) and any('"12"' in w for w in warnings)
+
+
+def test_contact_comes_from_master_not_the_llm():
+    from job_tracker.render import contact_from_master
+
+    c = contact_from_master(MASTER)
+    assert c.name == "Jane Doe" and c.details == ["Leeds, UK", "jane@example.com", "linkedin.com/in/janedoe"]
+
+
+def test_tailor_job_writes_pdf_report_and_updates_job(tmp_path):
+    from job_tracker.models import UnsupportedClaim, Verification
+    from job_tracker.scoring import Profile
+    from job_tracker.tailor import tailor_job
+
+    class FakeTailor:
+        profile = Profile(resume=MASTER, templates="", preferences="")
+
+        def generate(self, job, template):
+            assert template == "B"
+            return _tailored()
+
+        def verify(self, resume):
+            return Verification(unsupported_claims=[UnsupportedClaim(claim="Frontend lead", reason="test")])
+
+    job = Job(job_id="42", url="u", title="FE Lead", company="Big Co!", fit=_fit())
+    result = tailor_job(job, FakeTailor(), out_dir=str(tmp_path), on_progress=lambda _: None)
+    assert result.pages == 1 and result.pdf_path.endswith("Big_Co_42_B.pdf")
+    assert (tmp_path / "Big_Co_42_B.pdf").read_bytes().startswith(b"%PDF")
+    report = (tmp_path / "Big_Co_42_B.md").read_text()
+    assert "Checker: \"Frontend lead\"" in report and "Moved design-system work" in report
+    assert job.resume_status == "Tailored" and job.resume_file == result.pdf_path
+
+
+def test_generate_retries_with_less_thinking_when_cut_off():
+    from job_tracker.scoring import Profile
+    from job_tracker.tailor import AnswerCutOff, AnthropicTailor
+
+    efforts = []
+
+    class T(AnthropicTailor):
+        def __init__(self):
+            self.profile = Profile(resume=MASTER, templates="", preferences="")
+            self.model = "m"
+
+        def template_text(self, letter):
+            return "template"
+
+        def _parse(self, **kw):
+            efforts.append(kw["output_config"]["effort"])
+            if kw["output_config"]["effort"] == "medium":
+                raise AnswerCutOff("cut off")
+            return _tailored()
+
+    resume = T().generate(Job(job_id="1", url="u", title="FE"), "A")
+    assert efforts == ["medium", "low"] and resume.headline.startswith("Engineering Lead")

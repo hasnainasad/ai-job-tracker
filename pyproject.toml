@@ -10,6 +10,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "gspread>=6.0",
     "anthropic>=2.14",
+    "reportlab>=4.0",
 ]
 
 [project.scripts]

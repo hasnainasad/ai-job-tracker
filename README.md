@@ -3,7 +3,7 @@
 Paste LinkedIn job links, get a clean tracker of those jobs (JSON, CSV and a Google Sheet).
 Later phases add LLM fit scoring, resume tailoring, and a React + FastAPI app with agents.
 
-**Status:** phases 0 to 3 working against live LinkedIn and Google Sheets. Phase 4 (AI extraction) working. Phase 5 (fit scoring) built, waiting for its first live run.
+**Status:** phases 0 to 3 working against live LinkedIn and Google Sheets. Phase 4 (AI extraction) working. Phase 5 (fit scoring) working. Phase 6 (resume tailoring) built, waiting for its first live run.
 
 ---
 
@@ -28,7 +28,7 @@ cp .env.example .env
 **3. Check it works:**
 
 ```bash
-uv run pytest      # should say "12 passed"
+uv run pytest      # should say "17 passed"
 ```
 
 **4. Add some jobs and run it.** Open `urls.txt`, paste 3 to 5 LinkedIn job links (one per
@@ -115,6 +115,29 @@ with a prompt-cache marker, so after the first job it's read from cache at a fra
 the price; the run ends by printing how many tokens came from cache. Cost: roughly 2 to 5
 cents per job on `claude-opus-5-5`.
 
+**8. Tailor your resume for a job (phase 6).** Pick a job from the sheet by its `job_id`:
+
+```bash
+uv run job-tracker --tailor 4492071444 --sheet
+uv run job-tracker --tailor 4492071444 4487065297      # several at once
+uv run job-tracker --tailor 4492071444 --template D    # force a template
+```
+
+It starts from the job's `best_template` (from scoring), applies the `tailoring_tips`,
+and writes two files to `output/resumes/` (git-ignored):
+
+- `Company_jobid_X.pdf`: the resume, A4, in your template style, kept to 2 pages
+  (text shrinks slightly if needed).
+- `Company_jobid_X.md`: **read this before sending.** A checklist of anything the
+  guardrails flagged, what changed from the template and why, and the full text.
+
+Guardrails against invented facts: every bullet must quote the master-resume line it's
+based on (checked in Python), every number must appear in your master resume (checked
+in Python), and a second, cheaper model (`VERIFIER_MODEL`, default `claude-haiku-5-5`)
+fact-checks the whole resume. The sheet gets `resume_file`, and `resume_status` becomes
+"Tailored" if it was empty. Cost: roughly 10 to 15 cents per resume. Needs
+`profile/templates/A.md` ... `E.md` (full text of each template).
+
 ---
 
 ## Level 2: How it works (intermediate)
@@ -135,6 +158,8 @@ urls.txt ──► urls.py ──► fetchers.py ──► extract.py ──► 
 | `src/job_tracker/storage.py` | Writes to CSV and Google Sheets; matches rows by `job_id` and columns by header name, never overwrites your columns | Idempotent writes, Sheets API via `gspread` |
 | `src/job_tracker/llm.py` | Phase 4: sends each description to Claude and gets back a validated `JobInsights` | Structured outputs, prompt rules against guessing, API error handling |
 | `src/job_tracker/scoring.py` | Phase 5: scores each job against `profile/` with a written rubric | Rubric prompts, LLM-as-judge, prompt caching |
+| `src/job_tracker/tailor.py` | Phase 6: writes a tailored resume, then fact-checks it | Generator + verifier, grounding with source quotes, deterministic checks |
+| `src/job_tracker/render.py` | Phase 6: draws the resume as a PDF | Generating documents from code (ReportLab), fitting to a page limit |
 | `src/job_tracker/pipeline.py` | `run(urls)` glues it all together and returns a `RunResult` | Separating logic from interface |
 | `src/job_tracker/cli.py` | The `job-tracker` command | `argparse`, entry points |
 

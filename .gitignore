@@ -10,3 +10,5 @@ __pycache__/
 .DS_Store
 # Your resume and preferences: personal, never committed
 profile/
+# Tailored resumes (phase 6): personal
+output/

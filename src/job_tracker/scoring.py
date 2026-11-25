@@ -13,6 +13,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from .llm import LLMError, build_prompt
 from .models import FitAssessment, Job
 
@@ -102,6 +104,8 @@ class AnthropicScorer:
                 output_config={"effort": self.effort},
                 output_format=FitAssessment,
             )
+        except ValidationError as e:  # answer stopped mid-JSON (ran out of tokens)
+            raise LLMError("the answer was cut off before it finished") from e
         except a.AuthenticationError as e:
             raise LLMError("ANTHROPIC_API_KEY is missing or wrong (check .env)") from e
         except a.RateLimitError as e:

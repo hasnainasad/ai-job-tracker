@@ -3,6 +3,7 @@
   uv run job-tracker urls.txt                      fetch new jobs -> jobs.json + jobs.csv
   uv run job-tracker urls.txt --sheet --ai --score  ...plus Google Sheet, AI fields, fit scores
   uv run job-tracker --from-json --score --sheet    re-run AI steps on saved jobs (no LinkedIn)
+  uv run job-tracker --tailor 4492071444 --sheet    tailored PDF resume for a saved job
 """
 import argparse
 import json
@@ -65,9 +66,14 @@ def main():
     ap.add_argument("--ai", action="store_true", help="phase 4: LLM reads each description (uses API credit)")
     ap.add_argument("--score", action="store_true", help="phase 5: LLM scores fit vs your profile/ (uses API credit)")
     ap.add_argument("--profile", default="profile", help="folder with master_resume.md etc.")
+    ap.add_argument("--tailor", nargs="+", metavar="JOB_ID",
+                    help="phase 6: tailored PDF resume for these saved jobs (uses API credit)")
+    ap.add_argument("--template", help="with --tailor: force a template letter (default: the scored best_template)")
     args = ap.parse_args()
+    if args.tailor:
+        return tailor_command(args)
     if not args.urls_file and not args.from_json:
-        ap.error("give a urls file, or --from-json")
+        ap.error("give a urls file, --from-json, or --tailor JOB_ID")
 
     extractor = scorer = None
     if args.ai:
@@ -100,6 +106,37 @@ def main():
         print(f"\n{len(failed)} failed:")
         for f_ in failed:
             print(f"  {f_.url}: {f_.error}")
+
+
+def tailor_command(args):
+    from .tailor import make_tailor, tailor_job
+
+    saved = {j.job_id: j for j in load_json(args.out)}
+    missing = [jid for jid in args.tailor if jid not in saved]
+    if missing:
+        raise SystemExit(f"Not in {args.out}: {', '.join(missing)}. Add them first with a urls file.")
+    tailor = make_tailor(args.profile)
+    done = []
+    for i, jid in enumerate(args.tailor, 1):
+        job = saved[jid]
+        print(f"[{i}/{len(args.tailor)}] {job.title} @ {job.company}")
+        try:
+            result = tailor_job(job, tailor, template=args.template)
+        except Exception as e:  # noqa: BLE001 - one failure shouldn't stop the others
+            print(f"  failed: {e}")
+            continue
+        done.append(job)
+        print(f"  review: {result.report_path}")
+    if not done:
+        return
+    save_json(done, args.out)
+    save_to_csv(done, args.csv)
+    if args.sheet:
+        save_to_sheet(
+            done,
+            os.environ["GOOGLE_SHEET_ID"],
+            os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json"),
+        )
 
 
 if __name__ == "__main__":
