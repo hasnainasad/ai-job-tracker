@@ -3,7 +3,7 @@
 Paste LinkedIn job links, get a clean tracker of those jobs (JSON, CSV and a Google Sheet).
 Later phases add LLM fit scoring, resume tailoring, and a React + FastAPI app with agents.
 
-**Status:** phases 0 to 3 working against live LinkedIn and Google Sheets. Phase 4 (AI extraction) built, waiting for its first live run.
+**Status:** phases 0 to 3 working against live LinkedIn and Google Sheets. Phase 4 (AI extraction) working. Phase 5 (fit scoring) built, waiting for its first live run.
 
 ---
 
@@ -28,7 +28,7 @@ cp .env.example .env
 **3. Check it works:**
 
 ```bash
-uv run pytest      # should say "9 passed"
+uv run pytest      # should say "12 passed"
 ```
 
 **4. Add some jobs and run it.** Open `urls.txt`, paste 3 to 5 LinkedIn job links (one per
@@ -95,6 +95,25 @@ Cost: about $0.014 per job on `claude-opus-5-5` (the default), or about $0.0004 
 if you set `LLM_MODEL=claude-haiku-5-5` in `.env`. Runs without `--ai` keep the AI columns
 you already have.
 
+**7. Score each job against your resume (phase 5, optional).**
+
+1. Set up `profile/` (see `profile.example/README.md`): `master_resume.md`, `templates.md`
+   and, optionally, `preferences.md`. It's in `.gitignore`, so it never reaches GitHub.
+2. Score the jobs you already have, without touching LinkedIn:
+
+```bash
+uv run job-tracker --from-json --score --sheet
+```
+
+   Or score while adding new jobs: `uv run job-tracker urls.txt --sheet --ai --score`.
+
+This suggests `fit_score`, `key_strengths` and `key_gaps` (only where those cells are
+empty, so clear a cell to get a fresh suggestion) and fills `recommendation`
+(Apply / Maybe / Skip), `best_template` (A-E) and `fit_reasoning`. Your resume is sent
+with a prompt-cache marker, so after the first job it's read from cache at a fraction of
+the price; the run ends by printing how many tokens came from cache. Cost: roughly 2 to 5
+cents per job on `claude-opus-5-5`.
+
 ---
 
 ## Level 2: How it works (intermediate)
@@ -114,6 +133,7 @@ urls.txt ──► urls.py ──► fetchers.py ──► extract.py ──► 
 | `src/job_tracker/models.py` | Defines what a `Job` is | Pydantic models (validation, JSON) |
 | `src/job_tracker/storage.py` | Writes to CSV and Google Sheets; matches rows by `job_id` and columns by header name, never overwrites your columns | Idempotent writes, Sheets API via `gspread` |
 | `src/job_tracker/llm.py` | Phase 4: sends each description to Claude and gets back a validated `JobInsights` | Structured outputs, prompt rules against guessing, API error handling |
+| `src/job_tracker/scoring.py` | Phase 5: scores each job against `profile/` with a written rubric | Rubric prompts, LLM-as-judge, prompt caching |
 | `src/job_tracker/pipeline.py` | `run(urls)` glues it all together and returns a `RunResult` | Separating logic from interface |
 | `src/job_tracker/cli.py` | The `job-tracker` command | `argparse`, entry points |
 
@@ -181,6 +201,7 @@ job-tracker/
 ├── pyproject.toml        dependencies + the job-tracker command
 ├── .env.example          settings template (copy to .env)
 ├── urls.txt              your input list
+├── profile/              your resume + preferences (git-ignored; see profile.example/)
 ├── src/job_tracker/      the package (see Level 2)
 └── tests/                pytest tests + a saved sample job page
 ```

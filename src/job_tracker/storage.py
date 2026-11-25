@@ -16,16 +16,19 @@ USER_COLUMNS = [
     "status", "status_note", "date_applied", "resume_status",
     "fit_score", "key_strengths", "key_gaps", "notes",
 ]
+# Phase 5 (--score): the LLM's judgement of fit (fit_score/key_strengths/key_gaps are
+# suggestions written into YOUR columns above, only where they're empty).
+SCORE_COLUMNS = ["recommendation", "best_template", "fit_reasoning"]
 # Phase 4 (--ai): read from the description by the LLM.
 AI_COLUMNS = [
-    "remote_policy", "office_days_per_week", "years_experience_min",
     "must_have_skills", "nice_to_have_skills", "visa_sponsorship", "ai_summary",
+    "remote_policy", "office_days_per_week", "years_experience_min",
 ]
 SCRAPED_COLUMNS = [
     "posted", "applicants", "seniority", "employment_type", "job_function",
     "industries", "url", "scraped_at", "description",
 ]
-COLUMNS = ["job_id", "title", "company", "location", "salary", *USER_COLUMNS, *AI_COLUMNS, *SCRAPED_COLUMNS]
+COLUMNS = ["job_id", "title", "company", *USER_COLUMNS, *SCORE_COLUMNS, *AI_COLUMNS, *SCRAPED_COLUMNS,"location", "salary",]
 CELL_LIMIT = 49000  # Google Sheets max is 50,000 characters per cell
 
 
@@ -38,7 +41,11 @@ def _cell(value) -> str:
 
 
 def _as_dict(job: Job) -> dict[str, str]:
-    d = job.model_dump(mode="json", exclude={"insights"})
+    d = job.model_dump(mode="json", exclude={"insights", "fit"})
+    if job.fit:
+        d["recommendation"] = job.fit.recommendation
+        d["best_template"] = job.fit.best_template
+        d["fit_reasoning"] = f"{job.fit.reasoning} Template: {job.fit.template_reason}"
     if job.insights:  # flatten the nested insights into plain columns
         ins = job.insights.model_dump()
         ins["ai_summary"] = ins.pop("summary")

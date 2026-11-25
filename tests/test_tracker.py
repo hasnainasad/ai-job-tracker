@@ -165,3 +165,58 @@ def test_ai_failure_keeps_the_job():
     result = run(["https://www.linkedin.com/jobs/view/4012345678/"],
                  fetcher=FakeFetcher(), extractor=BrokenLLM(), on_progress=lambda _: None)
     assert len(result.jobs) == 1 and result.jobs[0].insights is None
+
+
+def _fit(**kw):
+    from job_tracker.models import FitAssessment
+
+    base = {
+        "skills_score": 85, "seniority_score": 70, "domain_score": 80, "fit_score": 78,
+        "key_strengths": ["React/TypeScript at HSBC", "Micro frontends"], "key_gaps": ["AG Grid"],
+        "best_template": "B", "template_reason": "Fintech product role.",
+        "recommendation": "Apply", "reasoning": "Strong frontend match.",
+    }
+    base.update(kw)
+    return FitAssessment(**base)
+
+
+def test_scoring_fills_empty_user_columns_only(tmp_path):
+    from job_tracker.pipeline import enrich
+
+    class FakeScorer:
+        def score(self, job):
+            return _fit()
+
+    jobs = enrich([Job(job_id="1", url="u", title="FE"), Job(job_id="2", url="u2", title="FE2")],
+                  scorer=FakeScorer(), on_progress=lambda _: None)
+    assert jobs[0].fit_score == "78" and jobs[0].key_gaps == "AG Grid"
+
+    path = tmp_path / "jobs.csv"
+    path.write_text("job_id,title,fit_score,key_gaps\n1,FE,55,my own gap note\n", encoding="utf-8")
+    save_to_csv(jobs, str(path))
+    with open(path, newline="") as f:
+        rows = {r["job_id"]: r for r in csv.DictReader(f)}
+    assert rows["1"]["fit_score"] == "55" and rows["1"]["key_gaps"] == "my own gap note"  # yours win
+    assert rows["2"]["fit_score"] == "78" and rows["2"]["recommendation"] == "Apply"
+    assert rows["2"]["best_template"] == "B"
+
+
+def test_load_profile_ignores_comment_only_preferences(tmp_path):
+    from job_tracker.scoring import load_profile
+
+    (tmp_path / "master_resume.md").write_text("Asad, Tech Lead", encoding="utf-8")
+    (tmp_path / "preferences.md").write_text("# Examples:\n#   Minimum salary: £110k\n", encoding="utf-8")
+    p = load_profile(str(tmp_path))
+    assert p.preferences == "" and "(none given)" in p.as_prompt()
+    (tmp_path / "preferences.md").write_text("# header\nHybrid only\n", encoding="utf-8")
+    assert load_profile(str(tmp_path)).preferences == "Hybrid only"
+
+
+def test_json_merge_keeps_old_jobs(tmp_path):
+    from job_tracker.cli import load_json, save_json
+
+    path = str(tmp_path / "jobs.json")
+    save_json([Job(job_id="1", url="u", title="A")], path)
+    total = save_json([Job(job_id="2", url="u", title="B"), Job(job_id="1", url="u", title="A2")], path)
+    jobs = {j.job_id: j for j in load_json(path)}
+    assert total == 2 and jobs["1"].title == "A2"

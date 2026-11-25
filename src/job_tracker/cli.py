@@ -1,47 +1,87 @@
-"""Command line entry point:  uv run job-tracker urls.txt [--sheet]"""
+"""Command line entry point.
+
+  uv run job-tracker urls.txt                      fetch new jobs -> jobs.json + jobs.csv
+  uv run job-tracker urls.txt --sheet --ai --score  ...plus Google Sheet, AI fields, fit scores
+  uv run job-tracker --from-json --score --sheet    re-run AI steps on saved jobs (no LinkedIn)
+"""
 import argparse
 import json
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .pipeline import run
+from .models import Job
+from .pipeline import enrich, run
 from .storage import save_to_csv, save_to_sheet
 from .urls import read_url_file
+
+
+def load_json(path: str) -> list[Job]:
+    p = Path(path)
+    if not p.exists():
+        return []
+    return [Job.model_validate(d) for d in json.loads(p.read_text(encoding="utf-8"))]
+
+
+def save_json(jobs: list[Job], path: str) -> int:
+    """Merge into the existing file by job_id, so jobs.json keeps every job you've ever added."""
+    by_id = {j.job_id: j for j in load_json(path)}
+    by_id.update({j.job_id: j for j in jobs})
+    Path(path).write_text(
+        json.dumps([j.model_dump(mode="json") for j in by_id.values()], indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return len(by_id)
 
 
 def main():
     load_dotenv()
     ap = argparse.ArgumentParser(description="LinkedIn job URLs -> JSON / CSV / Google Sheet")
-    ap.add_argument("urls_file")
+    ap.add_argument("urls_file", nargs="?", help="text file of LinkedIn job URLs")
+    ap.add_argument("--from-json", action="store_true",
+                    help="skip LinkedIn; run the AI steps on the jobs already in --out (jobs.json)")
     ap.add_argument("--out", default="jobs.json")
     ap.add_argument("--csv", default="jobs.csv")
     ap.add_argument("--sheet", action="store_true", help="also write to your Google Sheet")
     ap.add_argument("--fetcher", help="direct | scraperapi (default: FETCHER in .env)")
     ap.add_argument("--ai", action="store_true", help="phase 4: LLM reads each description (uses API credit)")
+    ap.add_argument("--score", action="store_true", help="phase 5: LLM scores fit vs your profile/ (uses API credit)")
+    ap.add_argument("--profile", default="profile", help="folder with master_resume.md etc.")
     args = ap.parse_args()
+    if not args.urls_file and not args.from_json:
+        ap.error("give a urls file, or --from-json")
 
-    extractor = None
+    extractor = scorer = None
     if args.ai:
         from .llm import make_extractor
 
         extractor = make_extractor()
-    result = run(read_url_file(args.urls_file), args.fetcher, extractor=extractor)
+    if args.score:
+        from .scoring import make_scorer
 
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump([j.model_dump(mode="json") for j in result.jobs], f, indent=2, ensure_ascii=False)
-    print(f"JSON: {len(result.jobs)} job(s) -> {args.out}")
-    save_to_csv(result.jobs, args.csv)
+        scorer = make_scorer(args.profile)
 
-    if args.sheet and result.jobs:
+    if args.from_json:
+        jobs, failed = enrich(load_json(args.out), extractor, scorer), []
+    else:
+        result = run(read_url_file(args.urls_file), args.fetcher, extractor=extractor, scorer=scorer)
+        jobs, failed = result.jobs, result.failed
+
+    total = save_json(jobs, args.out)
+    print(f"JSON: {len(jobs)} job(s) saved, {total} in {args.out}")
+    save_to_csv(jobs, args.csv)
+    if args.sheet and jobs:
         save_to_sheet(
-            result.jobs,
+            jobs,
             os.environ["GOOGLE_SHEET_ID"],
             os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json"),
         )
-    if result.failed:
-        print(f"\n{len(result.failed)} failed:")
-        for f_ in result.failed:
+    if scorer is not None and scorer.cache_reads:
+        print(f"Prompt cache: {scorer.cache_reads:,} resume tokens read from cache (billed at ~5%)")
+    if failed:
+        print(f"\n{len(failed)} failed:")
+        for f_ in failed:
             print(f"  {f_.url}: {f_.error}")
 
 

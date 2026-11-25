@@ -1,14 +1,20 @@
-"""The whole flow as ONE function: URLs in, RunResult out.
+"""The whole flow: URLs in, RunResult out.
 
-The CLI calls this today. In phase 7 a FastAPI endpoint will call the very same
-function (and an agent can call it as a tool), so there's no logic to rewrite.
+  run(urls, ...)        fetch + parse each job, then enrich it
+  enrich(jobs, ...)     the AI steps only; also used on jobs loaded from jobs.json,
+                        so you can score again without re-downloading from LinkedIn
+
+The CLI calls these today. In phase 7 a FastAPI endpoint will call the very same
+functions (and an agent can call them as tools), so there's no logic to rewrite.
 """
 from collections.abc import Callable
 
 from .extract import parse_job
 from .fetchers import FetchError, make_fetcher
-from .models import FailedJob, RunResult
+from .models import FailedJob, Job, RunResult
 from .urls import canonical_url, parse_urls
+
+Progress = Callable[[str], None]
 
 
 def run(
@@ -16,9 +22,10 @@ def run(
     fetcher_name: str | None = None,
     fetcher=None,
     extractor=None,
-    on_progress: Callable[[str], None] = print,
+    scorer=None,
+    on_progress: Progress = print,
 ) -> RunResult:
-    """extractor: an LLM extractor (see llm.py). None = skip phase 4."""
+    """extractor: phase 4 (see llm.py). scorer: phase 5 (see scoring.py). None = skip."""
     targets, skipped = parse_urls(urls)
     result = RunResult(failed=[FailedJob(url=u, error="no LinkedIn job ID in URL") for u in skipped])
     fetcher = fetcher or make_fetcher(fetcher_name)  # pass your own to test or to plug in a new source
@@ -31,23 +38,44 @@ def run(
             if not job.title:
                 raise FetchError("page had no job title (expired job, or a login wall)")
             on_progress(f"  ok: {job.title} @ {job.company}")
-            if extractor is not None:
-                _enrich(job, extractor, on_progress)
-            result.jobs.append(job)
         except Exception as e:  # noqa: BLE001 - one bad URL shouldn't stop the batch
             result.failed.append(FailedJob(url=url, error=str(e)))
             on_progress(f"  failed: {e}")
+            continue
+        enrich_one(job, extractor, scorer, on_progress)
+        result.jobs.append(job)
     return result
 
 
-def _enrich(job, extractor, on_progress) -> None:
-    """Phase 4. A failed LLM call never loses the job: it's saved without insights."""
-    try:
-        job.insights = extractor.extract(job)
-    except Exception as e:  # noqa: BLE001
-        on_progress(f"  AI extraction skipped: {e}")
-        return
-    if not job.salary and job.insights.salary_text:
-        job.salary = job.insights.salary_text  # e.g. salary that was only in the title
-    skills = ", ".join(job.insights.must_have_skills[:5])
-    on_progress(f"  AI: {job.insights.remote_policy}, salary: {job.salary or '-'}, skills: {skills or '-'}")
+def enrich(jobs: list[Job], extractor=None, scorer=None, on_progress: Progress = print) -> list[Job]:
+    """Run the AI steps on jobs you already have (e.g. loaded from jobs.json)."""
+    for i, job in enumerate(jobs, 1):
+        on_progress(f"[{i}/{len(jobs)}] {job.title} @ {job.company}")
+        enrich_one(job, extractor, scorer, on_progress)
+    return jobs
+
+
+def enrich_one(job: Job, extractor, scorer, on_progress: Progress) -> None:
+    """A failed AI call never loses the job: it's saved without that step's columns."""
+    if extractor is not None:
+        try:
+            job.insights = extractor.extract(job)
+        except Exception as e:  # noqa: BLE001
+            on_progress(f"  AI extraction skipped: {e}")
+        else:
+            if not job.salary and job.insights.salary_text:
+                job.salary = job.insights.salary_text  # e.g. salary that was only in the title
+            skills = ", ".join(job.insights.must_have_skills[:5])
+            on_progress(f"  AI: {job.insights.remote_policy}, salary: {job.salary or '-'}, skills: {skills or '-'}")
+
+    if scorer is not None:
+        try:
+            job.fit = scorer.score(job)
+        except Exception as e:  # noqa: BLE001
+            on_progress(f"  scoring skipped: {e}")
+        else:
+            # Suggestions for YOUR columns. storage.py only writes them where the cell is empty.
+            job.fit_score = str(job.fit.fit_score)
+            job.key_strengths = "; ".join(job.fit.key_strengths)
+            job.key_gaps = "; ".join(job.fit.key_gaps)
+            on_progress(f"  fit: {job.fit.fit_score} -> {job.fit.recommendation} (template {job.fit.best_template})")

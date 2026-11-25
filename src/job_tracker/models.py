@@ -27,6 +27,20 @@ class JobInsights(BaseModel):
     summary: str = Field(description="One plain sentence: what the role is and what the team does.")
 
 
+class FitAssessment(BaseModel):
+    """Phase 5: how well a job fits your resume, as judged by the LLM."""
+    skills_score: int = Field(description="0-100: how well your skills cover the job's must-haves.")
+    seniority_score: int = Field(description="0-100: how well your level and experience match the role's level.")
+    domain_score: int = Field(description="0-100: how relevant your industry/domain background is.")
+    fit_score: int = Field(description="0-100 overall, using the rubric. Not a plain average.")
+    key_strengths: list[str] = Field(description="Top 3 reasons you're a strong match, each citing resume evidence.")
+    key_gaps: list[str] = Field(description="Top 3 things the job asks for that the resume doesn't show. Empty if none.")
+    best_template: str = Field(description='Letter of the resume template that fits best: "A", "B", "C", "D" or "E".')
+    template_reason: str = Field(description="One sentence: why that template.")
+    recommendation: str = Field(description='"Apply", "Maybe" or "Skip".')
+    reasoning: str = Field(description="One or two sentences explaining the overall score.")
+
+
 class Job(BaseModel):
     job_id: str
     url: str
@@ -43,6 +57,7 @@ class Job(BaseModel):
     description: str = ""
     scraped_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     insights: JobInsights | None = None  # filled by phase 4 (--ai)
+    fit: FitAssessment | None = None      # filled by phase 5 (--score)
     # Tracker columns YOU own. The tool never overwrites them once they have a value.
     # Fill them in the CSV / Google Sheet now, and from the React UI later.
     # (Phase 5 will pre-fill fit_score, key_strengths and key_gaps for you to edit.)
