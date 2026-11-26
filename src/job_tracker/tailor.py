@@ -107,6 +107,7 @@ class TailorResult:
     report_path: str
     pages: int
     warnings: list[str] = field(default_factory=list)
+    template: str = ""
 
 
 class AnthropicTailor:
@@ -233,7 +234,7 @@ def tailor_job(job: Job, tailor, out_dir: str = "output/resumes", template: str 
     job.resume_file = pdf_path
     job.resume_status = "Tailored"  # only lands in your sheet if that cell is empty
     on_progress(f"  saved {pdf_path} ({pages} pages, {len(warnings)} thing(s) to check)")
-    return TailorResult(pdf_path, report_path, pages, warnings)
+    return TailorResult(pdf_path, report_path, pages, warnings, letter)
 
 
 def make_tailor(profile_dir: str = "profile", provider: str | None = None):

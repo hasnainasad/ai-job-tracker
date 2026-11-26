@@ -2,7 +2,7 @@
 exactly what FastAPI uses for request/response bodies in phase 7."""
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 
 class JobInsights(BaseModel):
@@ -134,3 +134,19 @@ class RunResult(BaseModel):
     jobs: list[Job] = []
     failed: list[FailedJob] = []
     known: list[str] = []  # job IDs skipped because they were already saved
+
+
+def load_job(data: dict) -> Job:
+    """Load one saved job, coping with data written by an older version of the tool.
+
+    When we add fields to the AI outputs (e.g. tailoring_benefit), older saved results
+    no longer match the model. They're only cached AI output, so we drop the stale
+    part and the next --ai / --score run regenerates it. (This is "schema migration".)
+    """
+    try:
+        return Job.model_validate(data)
+    except ValidationError:
+        stale = [k for k in ("fit", "insights") if data.get(k) is not None]
+        job = Job.model_validate({**data, **dict.fromkeys(stale)})
+        print(f"  note: job {job.job_id} has old-format {' and '.join(stale)}; run --score/--ai to refresh")
+        return job

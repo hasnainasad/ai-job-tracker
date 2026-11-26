@@ -1,4 +1,5 @@
-"""Phase 3: save jobs to a Google Sheet (or a CSV file if you have no Sheet yet).
+"""Phase 3: the tracker columns, and the CSV export. (The Google Sheet sync lives in
+sheet_sync.py since phase 7a.)
 
 Two rules make the tracker safe to re-run:
   1. Rows are matched by job_id, so running the tool twice updates instead of duplicating.
@@ -80,36 +81,6 @@ def _final_header(current: list[str]) -> list[str]:
     """Our columns in our order, plus any extra columns you added yourself (at the end)."""
     extra = [c for c in current if c and c not in COLUMNS]
     return COLUMNS + extra
-
-
-def save_to_sheet(jobs: list[Job], sheet_id: str, creds_file: str, tab: str = "Jobs"):
-    import gspread  # imported here so CSV-only users don't need Google set up
-
-    gc = gspread.service_account(filename=creds_file)
-    sh = gc.open_by_key(sheet_id)
-    try:
-        ws = sh.worksheet(tab)
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=tab, rows=1000, cols=len(COLUMNS))
-
-    values = ws.get_all_values()  # one read for the whole sheet
-    current = values[0] if values else []
-    existing = {}
-    for raw in values[1:]:
-        r = dict(zip(current, raw, strict=False))
-        if r.get("job_id"):
-            existing[r["job_id"]] = r
-    before = set(existing)
-
-    header = _final_header(current)
-    rows = merge(existing, jobs, header)
-    grid = [header] + [[r[c] for c in header] for r in rows]
-
-    ws.clear()
-    ws.update(range_name="A1", values=grid, value_input_option="RAW")  # one write
-    ws.freeze(rows=1)
-    added = len({j.job_id for j in jobs} - before)
-    print(f"Google Sheet: {added} added, {len(jobs) - added} updated -> {sh.url}")
 
 
 def save_to_csv(jobs: list[Job], path: str):

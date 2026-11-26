@@ -1,11 +1,14 @@
-"""Command line entry point.
+"""Command line entry point. Since phase 7a everything is saved in tracker.db (a SQLite
+database); jobs.json and jobs.csv are written after each run as exports.
 
-  uv run job-tracker urls.txt                      fetch new jobs -> jobs.json + jobs.csv
-                                                   (jobs already in jobs.json are skipped)
-  uv run job-tracker urls.txt --sheet --ai --score  ...plus Google Sheet, AI fields, fit scores
-  uv run job-tracker --from-json --score --sheet    AI steps for saved jobs that don't have them yet
-  add --refresh to any of these to redo jobs you already have
-  uv run job-tracker --tailor 4492071444 --sheet    tailored PDF resume for a saved job
+  uv run job-tracker urls.txt                    fetch new jobs (already-saved ones are skipped)
+  uv run job-tracker urls.txt --sheet --ai --score  ...plus AI fields, fit scores, Sheet sync
+  uv run job-tracker --saved --score --sheet     AI steps for saved jobs that don't have them yet
+  uv run job-tracker --sheet                     just sync the Google Sheet (pull your edits, push ours)
+  uv run job-tracker --tailor 4492071444 --sheet tailored PDF resume for a saved job
+  add --refresh to redo jobs you already have
+
+The first run moves jobs.json into the database automatically (or use --import-json).
 """
 import argparse
 import json
@@ -13,11 +16,21 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import ValidationError
+from sqlmodel import Session
 
-from .models import Job
+from .db import (
+    add_resume,
+    db_url,
+    get_job,
+    import_json,
+    known_ids,
+    load_all,
+    make_engine,
+    upsert_jobs,
+)
+from .models import Job, load_job
 from .pipeline import enrich, run
-from .storage import save_to_csv, save_to_sheet
+from .storage import save_to_csv
 from .urls import read_url_file
 
 
@@ -25,23 +38,7 @@ def load_json(path: str) -> list[Job]:
     p = Path(path)
     if not p.exists():
         return []
-    return [_load_job(d) for d in json.loads(p.read_text(encoding="utf-8"))]
-
-
-def _load_job(data: dict) -> Job:
-    """Load one saved job, coping with files written by an older version of the tool.
-
-    When we add fields to the AI outputs (e.g. tailoring_benefit), older saved results
-    no longer match the model. They're only cached AI output, so we drop the stale
-    part and the next --ai / --score run regenerates it. (This is "schema migration".)
-    """
-    try:
-        return Job.model_validate(data)
-    except ValidationError:
-        stale = [k for k in ("fit", "insights") if data.get(k) is not None]
-        job = Job.model_validate({**data, **dict.fromkeys(stale)})
-        print(f"  note: job {job.job_id} has old-format {' and '.join(stale)}; run --score/--ai to refresh")
-        return job
+    return [load_job(d) for d in json.loads(p.read_text(encoding="utf-8"))]
 
 
 def save_json(jobs: list[Job], path: str) -> int:
@@ -55,15 +52,33 @@ def save_json(jobs: list[Job], path: str) -> int:
     return len(by_id)
 
 
+def sync_sheet_now(session: Session) -> None:
+    from .sheet_sync import open_worksheet, sync_sheet
+
+    ws = open_worksheet(
+        os.environ["GOOGLE_SHEET_ID"], os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
+    )
+    sync_sheet(session, ws)
+
+
+def export(session: Session, changed: list[Job], args) -> None:
+    """jobs.json gets every job; jobs.csv merges the changed ones (keeping what you typed there)."""
+    total = save_json(load_all(session), args.out)
+    print(f"Exports: {total} job(s) in {args.out}", end="; ")
+    save_to_csv(changed, args.csv)
+
+
 def main():
     load_dotenv()
-    ap = argparse.ArgumentParser(description="LinkedIn job URLs -> JSON / CSV / Google Sheet")
+    ap = argparse.ArgumentParser(description="LinkedIn job URLs -> database -> JSON / CSV / Google Sheet")
     ap.add_argument("urls_file", nargs="?", help="text file of LinkedIn job URLs")
-    ap.add_argument("--from-json", action="store_true",
-                    help="skip LinkedIn; run the AI steps on the jobs already in --out (jobs.json)")
-    ap.add_argument("--out", default="jobs.json")
-    ap.add_argument("--csv", default="jobs.csv")
-    ap.add_argument("--sheet", action="store_true", help="also write to your Google Sheet")
+    ap.add_argument("--saved", "--from-json", dest="saved", action="store_true",
+                    help="skip LinkedIn; run the AI steps on jobs already in the database")
+    ap.add_argument("--db", help="database file or URL (default: DATABASE_URL in .env, else tracker.db)")
+    ap.add_argument("--import-json", action="store_true", help="copy --out (jobs.json) into the database")
+    ap.add_argument("--out", default="jobs.json", help="JSON export (and the file --import-json reads)")
+    ap.add_argument("--csv", default="jobs.csv", help="CSV export")
+    ap.add_argument("--sheet", action="store_true", help="also sync your Google Sheet (on its own: sync only)")
     ap.add_argument("--fetcher", help="direct | scraperapi (default: FETCHER in .env)")
     ap.add_argument("--ai", action="store_true", help="phase 4: LLM reads each description (uses API credit)")
     ap.add_argument("--score", action="store_true", help="phase 5: LLM scores fit vs your profile/ (uses API credit)")
@@ -74,11 +89,23 @@ def main():
                     help="phase 6: tailored PDF resume for these saved jobs (uses API credit)")
     ap.add_argument("--template", help="with --tailor: force a template letter (default: the scored best_template)")
     args = ap.parse_args()
-    if args.tailor:
-        return tailor_command(args)
-    if not args.urls_file and not args.from_json:
-        ap.error("give a urls file, --from-json, or --tailor JOB_ID")
+    if not (args.urls_file or args.saved or args.tailor or args.sheet or args.import_json):
+        ap.error("give a urls file, --saved, --sheet, --import-json or --tailor JOB_ID")
 
+    engine = make_engine(db_url(args.db))
+    with Session(engine) as session:
+        if args.import_json or (not known_ids(session) and Path(args.out).exists()):
+            n = import_json(session, args.out)
+            print(f"Database: imported {n} job(s) from {args.out}")
+        if args.tailor:
+            return tailor_command(args, session)
+        if args.urls_file or args.saved:
+            fetch_and_enrich(args, session)
+        if args.sheet:
+            sync_sheet_now(session)
+
+
+def fetch_and_enrich(args, session: Session) -> None:
     extractor = scorer = None
     if args.ai:
         from .llm import make_extractor
@@ -89,29 +116,23 @@ def main():
 
         scorer = make_scorer(args.profile)
 
-    saved = load_json(args.out)
-    if args.from_json:
-        jobs, failed = enrich(saved, extractor, scorer, only_missing=not args.refresh), []
+    failed = []
+    if args.saved:
+        jobs = enrich(load_all(session), extractor, scorer, only_missing=not args.refresh)
     else:
-        known = set() if args.refresh else {j.job_id for j in saved}
+        known = set() if args.refresh else known_ids(session)
         result = run(read_url_file(args.urls_file), args.fetcher, extractor=extractor, scorer=scorer,
                      known_ids=known)
         jobs, failed = result.jobs, result.failed
         if result.known and (extractor or scorer):
-            print("  tip: to add AI columns to saved jobs that lack them: --from-json --ai --score")
-        if not jobs:
-            print("Nothing new to save.")
-            return report_failed(failed)
+            print("  tip: to add AI columns to saved jobs that lack them: --saved --ai --score")
 
-    total = save_json(jobs, args.out)
-    print(f"JSON: {len(jobs)} job(s) saved, {total} in {args.out}")
-    save_to_csv(jobs, args.csv)
-    if args.sheet and jobs:
-        save_to_sheet(
-            jobs,
-            os.environ["GOOGLE_SHEET_ID"],
-            os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json"),
-        )
+    if jobs:
+        added, updated = upsert_jobs(session, jobs)
+        print(f"Database: {added} added, {updated} updated, {len(known_ids(session))} in total")
+        export(session, jobs, args)
+    else:
+        print("Nothing new to save.")
     if scorer is not None and scorer.cache_reads:
         print(f"Prompt cache: {scorer.cache_reads:,} resume tokens read from cache (billed at ~5%)")
     report_failed(failed)
@@ -124,13 +145,13 @@ def report_failed(failed) -> None:
             print(f"  {f_.url}: {f_.error}")
 
 
-def tailor_command(args):
+def tailor_command(args, session: Session):
     from .tailor import make_tailor, tailor_job
 
-    saved = {j.job_id: j for j in load_json(args.out)}
-    missing = [jid for jid in args.tailor if jid not in saved]
+    saved = {jid: get_job(session, jid) for jid in args.tailor}
+    missing = [jid for jid, job in saved.items() if job is None]
     if missing:
-        raise SystemExit(f"Not in {args.out}: {', '.join(missing)}. Add them first with a urls file.")
+        raise SystemExit(f"Not saved yet: {', '.join(missing)}. Add them first with a urls file.")
     tailor = make_tailor(args.profile)
     done = []
     for i, jid in enumerate(args.tailor, 1):
@@ -141,18 +162,15 @@ def tailor_command(args):
         except Exception as e:  # noqa: BLE001 - one failure shouldn't stop the others
             print(f"  failed: {e}")
             continue
+        add_resume(session, jid, result)
         done.append(job)
         print(f"  review: {result.report_path}")
     if not done:
         return
-    save_json(done, args.out)
-    save_to_csv(done, args.csv)
+    upsert_jobs(session, done)
+    export(session, done, args)
     if args.sheet:
-        save_to_sheet(
-            done,
-            os.environ["GOOGLE_SHEET_ID"],
-            os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json"),
-        )
+        sync_sheet_now(session)
 
 
 if __name__ == "__main__":

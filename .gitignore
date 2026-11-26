@@ -12,3 +12,7 @@ __pycache__/
 profile/
 # Tailored resumes (phase 6): personal
 output/
+# The database (phase 7a): your data, never committed
+tracker.db
+tracker.db-wal
+tracker.db-shm
