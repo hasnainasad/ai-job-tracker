@@ -34,6 +34,7 @@ from .runs import (
     create_run,
     execute_run,
     score_work,
+    search_work,
     sheet_work,
     tailor_work,
 )
@@ -58,6 +59,16 @@ class AddJobs(BaseModel):
     ai: bool = False
     score: bool = False
     refresh: bool = False
+
+
+class SearchJobs(BaseModel):
+    keywords: str = Field(min_length=2, examples=["senior react developer"])
+    location: str = Field(default="", examples=["London"])
+    days: int | None = Field(default=7, ge=1, le=30, description="posted in the last N days")
+    limit: int = Field(default=20, ge=1, le=100)
+    workplace: str | None = Field(default=None, examples=["remote,hybrid"])
+    ai: bool = False
+    score: bool = False
 
 
 class Run(BaseModel):
@@ -150,6 +161,13 @@ def create_app(engine=None, services: Services | None = None) -> FastAPI:
         work = add_work(services_of(request), body.urls, body.ai, body.score, body.refresh)
         return start_run(request, s, background, "add", body.model_dump(), work)
 
+    @app.post("/jobs/search", response_model=Run, status_code=202, tags=["jobs"])
+    def search(s: SessionDep, body: SearchJobs, request: Request, background: BackgroundTasks):
+        """Search LinkedIn and add the jobs not saved yet. Starts a background run."""
+        work = search_work(services_of(request), body.keywords, body.location, body.days, body.limit,
+                           body.workplace, body.ai, body.score)
+        return start_run(request, s, background, "search", body.model_dump(), work)
+
     @app.post("/jobs/{job_id}/score", response_model=Run, status_code=202, tags=["jobs"])
     def score_job(s: SessionDep, job_id: str, request: Request, background: BackgroundTasks, ai: bool = False):
         """Score (or re-score) one saved job. ai=true also re-reads the description first."""
@@ -158,11 +176,13 @@ def create_app(engine=None, services: Services | None = None) -> FastAPI:
         return start_run(request, s, background, "score", {"job_id": job_id, "ai": ai}, work)
 
     @app.post("/jobs/{job_id}/tailor", response_model=Run, status_code=202, tags=["resumes"])
-    def tailor(s: SessionDep, job_id: str, request: Request, background: BackgroundTasks, template: str | None = None):
-        """Write a tailored PDF resume for one saved job (uses API credit)."""
+    def tailor(s: SessionDep, job_id: str, request: Request, background: BackgroundTasks,
+               template: str | None = None, feedback: str | None = None):
+        """Write a tailored PDF resume for one saved job (uses API credit). feedback = revise."""
         _require(s, job_id)
-        work = tailor_work(services_of(request), job_id, template)
-        return start_run(request, s, background, "tailor", {"job_id": job_id, "template": template}, work)
+        work = tailor_work(services_of(request), job_id, template, feedback)
+        return start_run(request, s, background, "tailor",
+                         {"job_id": job_id, "template": template, "feedback": feedback}, work)
 
     @app.get("/jobs/{job_id}/resume", tags=["resumes"], response_class=FileResponse)
     def download_resume(s: SessionDep, job_id: str):

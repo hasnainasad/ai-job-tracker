@@ -6,6 +6,8 @@ database); jobs.json and jobs.csv are written after each run as exports.
   uv run job-tracker --saved --score --sheet     AI steps for saved jobs that don't have them yet
   uv run job-tracker --sheet                     just sync the Google Sheet (pull your edits, push ours)
   uv run job-tracker --tailor 4492071444 --sheet tailored PDF resume for a saved job
+  uv run job-tracker --search "react lead" --location London --score   find jobs on LinkedIn, add new ones
+  uv run job-tracker --searches searches.txt --list-only               just show what the searches find
   add --refresh to redo jobs you already have
 
 The first run moves jobs.json into the database automatically (or use --import-json).
@@ -87,10 +89,18 @@ def main():
     ap.add_argument("--profile", default="profile", help="folder with master_resume.md etc.")
     ap.add_argument("--tailor", nargs="+", metavar="JOB_ID",
                     help="phase 6: tailored PDF resume for these saved jobs (uses API credit)")
+    ap.add_argument("--search", metavar="KEYWORDS", help="phase 7d: search LinkedIn and add the new jobs found")
+    ap.add_argument("--searches", metavar="FILE", help="several searches, one per line (see searches.example.txt)")
+    ap.add_argument("--location", default="", help="with --search: e.g. London, United Kingdom")
+    ap.add_argument("--days", type=int, default=7, help="with --search: posted in the last N days (default 7)")
+    ap.add_argument("--limit", type=int, default=20, help="with --search: at most N results per search (default 20)")
+    ap.add_argument("--workplace", help="with --search: remote, hybrid, onsite, or a list like remote,hybrid")
+    ap.add_argument("--list-only", action="store_true", help="with --search: show results, add nothing")
     ap.add_argument("--template", help="with --tailor: force a template letter (default: the scored best_template)")
     args = ap.parse_args()
-    if not (args.urls_file or args.saved or args.tailor or args.sheet or args.import_json):
-        ap.error("give a urls file, --saved, --sheet, --import-json or --tailor JOB_ID")
+    if not (args.urls_file or args.saved or args.tailor or args.sheet or args.import_json
+            or args.search or args.searches):
+        ap.error("give a urls file, --search, --searches, --saved, --sheet, --import-json or --tailor JOB_ID")
 
     engine = make_engine(db_url(args.db))
     with Session(engine) as session:
@@ -99,13 +109,44 @@ def main():
             print(f"Database: imported {n} job(s) from {args.out}")
         if args.tailor:
             return tailor_command(args, session)
-        if args.urls_file or args.saved:
+        if args.search or args.searches:
+            urls = search_command(args, session)
+            if args.list_only:
+                return
+            if not urls:
+                print("Nothing new to add.")
+            else:
+                fetch_and_enrich(args, session, urls)
+        elif args.urls_file or args.saved:
             fetch_and_enrich(args, session)
         if args.sheet:
             sync_sheet_now(session)
 
 
-def fetch_and_enrich(args, session: Session) -> None:
+def search_command(args, session: Session) -> list[str]:
+    """Run the search(es); print the hits; return the URLs of jobs not saved yet."""
+    from .fetchers import make_fetcher
+    from .search import read_search_file, search_jobs
+
+    searches = read_search_file(args.searches) if args.searches else []
+    if args.search:
+        searches.append({"keywords": args.search, "location": args.location, "days": args.days,
+                         "workplace": args.workplace})
+    fetcher = make_fetcher(args.fetcher)
+    args.fetcher_obj = fetcher  # reuse it, so the polite pause carries on into the job fetches
+    known, new = known_ids(session), {}
+    for q in searches:
+        print(f"Searching: {q['keywords']}" + (f" in {q['location']}" if q["location"] else ""))
+        for h in search_jobs(fetcher, q["keywords"], q["location"], q["days"], args.limit, q["workplace"]):
+            mark = "saved" if h.job_id in known else ("dup" if h.job_id in new else "NEW")
+            print(f"  [{mark:5}] {h.job_id}  {h.title} @ {h.company} ({h.location}) {h.listed}")
+            if mark == "NEW":
+                new[h.job_id] = h.url
+    print(f"{len(new)} new job(s) found")
+    return list(new.values())
+
+
+def fetch_and_enrich(args, session: Session, urls: list[str] | None = None) -> None:
     extractor = scorer = None
     if args.ai:
         from .llm import make_extractor
@@ -121,7 +162,8 @@ def fetch_and_enrich(args, session: Session) -> None:
         jobs = enrich(load_all(session), extractor, scorer, only_missing=not args.refresh)
     else:
         known = set() if args.refresh else known_ids(session)
-        result = run(read_url_file(args.urls_file), args.fetcher, extractor=extractor, scorer=scorer,
+        result = run(urls or read_url_file(args.urls_file), args.fetcher,
+                     fetcher=getattr(args, "fetcher_obj", None), extractor=extractor, scorer=scorer,
                      known_ids=known)
         jobs, failed = result.jobs, result.failed
         if result.known and (extractor or scorer):

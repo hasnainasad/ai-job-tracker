@@ -1,0 +1,6 @@
+# One LinkedIn search per line:  keywords | location | days | workplace
+# Only keywords is required. days = posted in the last N days (default 7).
+# workplace = remote, hybrid, onsite, or a list like remote,hybrid
+# Copy this to searches.txt and run:  uv run job-tracker --searches searches.txt --list-only
+senior frontend engineer | London | 7 | hybrid,remote
+react tech lead | United Kingdom | 14 | remote

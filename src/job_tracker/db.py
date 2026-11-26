@@ -74,7 +74,7 @@ class RunRow(SQLModel, table=True):
     __tablename__ = "runs"
 
     id: int | None = Field(default=None, primary_key=True)
-    kind: str                      # add | score | tailor | sheet
+    kind: str                      # add | search | score | tailor | sheet
     status: str = "queued"         # queued -> running -> done | failed
     params: dict = Field(default_factory=dict, sa_column=Column(JSON))
     log: list = Field(default_factory=list, sa_column=Column(JSON))       # progress lines, as the CLI prints them

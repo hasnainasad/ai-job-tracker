@@ -159,7 +159,10 @@ class FakeTailor:
 
         self.profile = Profile(resume=MASTER, templates="", preferences="")
 
-    def generate(self, job, template):
+    feedback = None
+
+    def generate(self, job, template, feedback=""):
+        self.feedback = feedback
         return _tailored()
 
     def verify(self, resume):

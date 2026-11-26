@@ -150,7 +150,7 @@ class AnthropicTailor:
             raise FileNotFoundError(f"{path} not found (full text of template {letter})")
         return path.read_text(encoding="utf-8")
 
-    def generate(self, job: Job, template: str) -> TailoredResume:
+    def generate(self, job: Job, template: str, feedback: str = "") -> TailoredResume:
         tips = ""
         if job.fit:
             tips = (
@@ -161,8 +161,12 @@ class AnthropicTailor:
             f"<starting_template letter='{template}'>\n{self.template_text(template)}\n</starting_template>\n\n"
             f"<job>\n{build_prompt(job)}\n</job>\n\n"
             f"<fit_assessment>\n{tips or '(not scored)'}\n</fit_assessment>\n\n"
-            "Write the tailored resume."
         )
+        if feedback:
+            # A revision (phase 7d): a reviewer's notes. Still bound by the hard rules above.
+            user += (f"<reviewer_feedback>\n{feedback}\n</reviewer_feedback>\n\n"
+                     "Apply this feedback where the master resume supports it. ")
+        user += "Write the tailored resume."
         system = [
             {"type": "text", "text": TAILOR_RULES},
             {"type": "text", "text": f"<master_resume>\n{self.profile.resume}\n</master_resume>",
@@ -202,10 +206,11 @@ def safe_name(text: str) -> str:
 
 
 def tailor_job(job: Job, tailor, out_dir: str = "output/resumes", template: str | None = None,
-               on_progress=print) -> TailorResult:
+               on_progress=print, feedback: str | None = None) -> TailorResult:
+    """feedback: a reviewer's notes for a revision (phase 7d); saved as a separate _rev file."""
     letter = (template or (job.fit.best_template if job.fit else "") or "A").strip().upper()[:1]
-    on_progress(f"  writing resume from template {letter}...")
-    resume = tailor.generate(job, letter)
+    on_progress(f"  {'revising' if feedback else 'writing'} resume from template {letter}...")
+    resume = tailor.generate(job, letter, feedback=feedback) if feedback else tailor.generate(job, letter)
 
     warnings = check_against_master(resume, tailor.profile.resume)
     on_progress("  fact-checking...")
@@ -215,7 +220,7 @@ def tailor_job(job: Job, tailor, out_dir: str = "output/resumes", template: str 
     except LLMError as e:
         warnings.append(f"Checker call failed ({e}); review carefully by hand")
 
-    base = Path(out_dir) / f"{safe_name(job.company)}_{job.job_id}_{letter}"
+    base = Path(out_dir) / f"{safe_name(job.company)}_{job.job_id}_{letter}{'_rev' if feedback else ''}"
     pdf_path, report_path = f"{base}.pdf", f"{base}.md"
     pages = render_pdf(resume, contact_from_master(tailor.profile.resume), pdf_path)
     if pages > 2:
@@ -223,7 +228,8 @@ def tailor_job(job: Job, tailor, out_dir: str = "output/resumes", template: str 
 
     lines = [
         f"# Tailored resume: {job.title} @ {job.company}", "",
-        f"- Job: {job.url}", f"- Starting template: {letter}", f"- PDF: {pdf_path} ({pages} pages)", "",
+        f"- Job: {job.url}", f"- Starting template: {letter}", f"- PDF: {pdf_path} ({pages} pages)",
+        *([f"- Revised with reviewer feedback: {feedback}"] if feedback else []), "",
         "## Check before sending", "",
         *([f"- [ ] {w}" for w in warnings] or ["- No problems found by the automatic checks. Still read it once."]),
         "", "## What changed from the template", "", *[f"- {c}" for c in resume.change_log],

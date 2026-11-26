@@ -71,13 +71,14 @@ class Services:
 
 # ---------------------------------------------------------------- what each run does
 
-def add_work(svc: Services, urls: list[str], ai: bool = False, score: bool = False, refresh: bool = False) -> Work:
+def add_work(svc: Services, urls: list[str], ai: bool = False, score: bool = False, refresh: bool = False,
+             fetcher=None) -> Work:
     def work(s: Session, log) -> list[str]:
         from .pipeline import run
 
         result = run(
             urls,
-            fetcher=svc.fetcher(),
+            fetcher=fetcher or svc.fetcher(),
             extractor=svc.extractor() if ai else None,
             scorer=svc.scorer(svc.profile_dir) if score else None,
             on_progress=log,
@@ -105,18 +106,34 @@ def score_work(svc: Services, job_id: str, ai: bool = False) -> Work:
     return work
 
 
-def tailor_work(svc: Services, job_id: str, template: str | None = None) -> Work:
+def tailor_work(svc: Services, job_id: str, template: str | None = None, feedback: str | None = None) -> Work:
     def work(s: Session, log) -> list[str]:
         from .tailor import tailor_job
 
         job = db.get_job(s, job_id)
         result = tailor_job(job, svc.tailor(svc.profile_dir), out_dir=svc.resumes_dir,
-                            template=template, on_progress=log)
+                            template=template, on_progress=log, feedback=feedback)
         db.add_resume(s, job_id, result)
         db.upsert_jobs(s, [job])
         for w in result.warnings:
             log(f"check: {w}")
         return [job_id]
+
+    return work
+
+
+def search_work(svc: Services, keywords: str, location: str = "", days: int | None = 7, limit: int = 20,
+                workplace: str | None = None, ai: bool = False, score: bool = False) -> Work:
+    """Search LinkedIn, then add the jobs not saved yet (same as add_work with their URLs)."""
+    def work(s: Session, log) -> list[str]:
+        from .search import search_jobs
+
+        fetcher = svc.fetcher()
+        hits = search_jobs(fetcher, keywords, location, days, limit, workplace, on_progress=log)
+        known = db.known_ids(s)
+        new = [h.url for h in hits if h.job_id not in known]
+        log(f"{len(hits)} found, {len(hits) - len(new)} already saved, {len(new)} to add")
+        return add_work(svc, new, ai=ai, score=score, fetcher=fetcher)(s, log) if new else []
 
     return work
 

@@ -14,13 +14,21 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "sqlmodel>=0.0.22",
-    "mcp>=1.10",
+    "mcp>=2.3",
+    "openai-agents>=0.26",
 ]
 
 [project.scripts]
 job-tracker = "job_tracker.cli:main"
 job-tracker-api = "job_tracker.api:main"
 job-tracker-mcp = "job_tracker.mcp_server:main"
+job-tracker-agent = "job_tracker.agent_cli:main"
+
+[project.optional-dependencies]
+tracing = [
+    "langfuse>=5.2.0",
+    "openinference-instrumentation-openai-agents>=2.8.7",
+]
 
 [dependency-groups]
 dev = [

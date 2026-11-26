@@ -44,10 +44,13 @@ class DirectFetcher:
         self._first = False
 
     def fetch(self, job_id: str) -> str:
-        url = GUEST_URL.format(job_id=job_id)
+        return self.get(GUEST_URL.format(job_id=job_id), what=f"job {job_id}")
+
+    def get(self, url: str, params: dict | None = None, what: str = "page") -> str:
+        """Any public LinkedIn guest page, politely (used by fetch() and by search.py)."""
         for attempt in range(self.retries + 1):
             self._polite_pause()
-            r = self.session.get(url, timeout=20)
+            r = self.session.get(url, params=params, timeout=20)
             if r.status_code == 200:
                 return r.text
             if r.status_code == 429 and attempt < self.retries:
@@ -55,8 +58,8 @@ class DirectFetcher:
                 print(f"  rate-limited, waiting {wait}s...")
                 time.sleep(wait)
                 continue
-            raise FetchError(f"HTTP {r.status_code} for job {job_id}")
-        raise FetchError(f"gave up on job {job_id}")
+            raise FetchError(f"HTTP {r.status_code} for {what}")
+        raise FetchError(f"gave up on {what}")
 
 
 class ScraperAPIFetcher:
@@ -68,10 +71,13 @@ class ScraperAPIFetcher:
         self.api_key = api_key
 
     def fetch(self, job_id: str) -> str:
-        params = {"api_key": self.api_key, "url": GUEST_URL.format(job_id=job_id)}
-        r = requests.get(self.API, params=params, timeout=70)
+        return self.get(GUEST_URL.format(job_id=job_id), what=f"job {job_id}")
+
+    def get(self, url: str, params: dict | None = None, what: str = "page") -> str:
+        target = requests.Request("GET", url, params=params).prepare().url
+        r = requests.get(self.API, params={"api_key": self.api_key, "url": target}, timeout=70)
         if r.status_code != 200:
-            raise FetchError(f"ScraperAPI HTTP {r.status_code} for job {job_id}")
+            raise FetchError(f"ScraperAPI HTTP {r.status_code} for {what}")
         return r.text
 
 

@@ -3,7 +3,7 @@
 Paste LinkedIn job links, get a clean tracker of those jobs (JSON, CSV and a Google Sheet).
 Later phases add LLM fit scoring, resume tailoring, and a React + FastAPI app with agents.
 
-**Status:** phases 0 to 6 working live (fetch, Google Sheet, AI extraction, fit scoring, resume tailoring). Phase 7a (database + web API) working. Phase 7c (MCP server for Claude Desktop) built.
+**Status:** phases 0 to 6 working live (fetch, Google Sheet, AI extraction, fit scoring, resume tailoring). Phase 7a (database + web API) working. Phase 7c (MCP server for Claude Desktop) working. Phase 7d (LinkedIn search, job hunter and CV reviewer agents, tracing) built.
 
 ---
 
@@ -28,7 +28,7 @@ cp .env.example .env
 **3. Check it works:**
 
 ```bash
-uv run pytest      # should say "33 passed"
+uv run pytest      # should say "44 passed"
 ```
 
 **4. Add some jobs and run it.** Open `urls.txt`, paste 3 to 5 LinkedIn job links (one per
@@ -168,8 +168,9 @@ The `/docs` page lists every endpoint. Click one, then **Try it out**, then **Ex
 | `GET /jobs/{job_id}` | One job with all AI output |
 | `PATCH /jobs/{job_id}` | Edit your columns, e.g. `{"status": "Applied", "date_applied": "2026-11-26"}` |
 | `POST /jobs` | Add URLs: `{"urls": [...], "ai": true, "score": true}` |
+| `POST /jobs/search` | Search LinkedIn and add new jobs: `{"keywords": "react lead", "location": "London", "score": true}` |
 | `POST /jobs/{job_id}/score` | Score or re-score one job |
-| `POST /jobs/{job_id}/tailor` | Tailored PDF resume (`?template=D` to force one) |
+| `POST /jobs/{job_id}/tailor` | Tailored PDF resume (`?template=D` to force one, `?feedback=...` to revise) |
 | `GET /jobs/{job_id}/resume` | Download the latest tailored PDF |
 | `POST /sync/sheet` | Two-way Google Sheet sync |
 | `GET /runs/{id}` | Progress of a background run |
@@ -207,11 +208,12 @@ Apply jobs have no tailored resume yet?" or "mark the Pigment job as applied tod
 | `list_jobs` | Jobs with filters (status, recommendation, min fit) | Free |
 | `get_job` | One job in full, plus its latest tailored resume | Free |
 | `update_job` | Change your columns (status, notes, date applied...) | Free |
+| `search_jobs` | Search LinkedIn (keywords, location, days, workplace); adds nothing | Free |
 | `run_status` | Progress of a slow tool call | Free |
 | `sync_sheet` | Two-way Google Sheet sync | Free |
 | `add_jobs` | Add LinkedIn URLs (`ai` / `score` optional) | API credit if `ai`/`score` |
 | `score_job` | Score or re-score one job | ~2 to 5 cents |
-| `tailor_resume` | Tailored PDF resume | ~10 to 15 cents |
+| `tailor_resume` | Tailored PDF resume (`feedback` = a revision) | ~10 to 15 cents |
 
 Claude Desktop asks before each tool call the first time (you can allow a tool for the
 whole chat). The tool descriptions tell Claude to confirm paid tools with you. Slow tools
@@ -222,6 +224,53 @@ error, or the log in `~/Library/Logs/Claude/mcp-server-job-tracker.log`.
 Optional, to poke at the tools without Claude: `npx @modelcontextprotocol/inspector`
 (needs Node.js), then connect with command `uv` and arguments
 `--directory /path/to/ai-job-tracker run job-tracker-mcp`.
+
+**11. Find jobs by search instead of pasting URLs (phase 7d).**
+
+```bash
+uv run job-tracker --search "senior react developer" --location London --list-only   # just look
+uv run job-tracker --search "senior react developer" --location London --days 7 --limit 10 --ai --score --sheet
+uv run job-tracker --searches searches.txt --list-only        # several searches (copy searches.example.txt)
+```
+
+Each result shows `[NEW]` or `[saved]`. Without `--list-only`, the new ones go through
+the normal fetch → AI → score steps, exactly as if you had pasted their URLs. Options:
+`--days N` (posted in the last N days, default 7), `--limit N` (results per search,
+default 20), `--workplace remote,hybrid` (or `onsite`). Each page of 10 results is one
+slow, polite request, so keep `--limit` small.
+
+**12. Let the agents do the legwork (phase 7d).** Two agents built with the OpenAI
+Agents SDK. They need an OpenAI API key (platform.openai.com → API keys) in `.env` as
+`OPENAI_API_KEY`; fetching, scoring and tailoring still use your Anthropic key.
+
+```bash
+uv run job-tracker-agent hunt "hybrid React lead roles in London, posted this week" --max-jobs 5
+uv run job-tracker-agent hunt "remote staff frontend roles in the UK" --max-jobs 5 --tailor 1
+uv run job-tracker-agent review 4492071444             # the CV reviewer's verdict
+uv run job-tracker-agent review 4492071444 --revise    # ...plus one revision if it says so
+```
+
+- **Job hunter** searches LinkedIn, adds and scores the promising jobs, and prints a
+  shortlist (best first, with a reason each). It uses the same MCP tools Claude Desktop
+  uses. With `--tailor 1` it also tailors the best match, has the reviewer check it, and
+  revises once if needed.
+- **CV reviewer** reads a tailored resume next to the job posting and your master
+  resume, like a recruiter: verdict `ready` or `revise`, issues, and feedback. It only
+  suggests facts that are already in your master resume.
+- **Budget guardrail:** `--max-jobs` caps how many jobs it may add and score; tailoring
+  is off unless you pass `--tailor`; one revision per resume at most. Calls over budget
+  are refused by code before they run, and listed at the end with the estimated spend.
+- It can't change your own columns or sync your Sheet (those tools are hidden from it).
+
+**13. See what the agents did (tracing).** Every agent run is recorded step by step:
+each model call, each tool call with its inputs and answer, timings and tokens.
+
+- With just `OPENAI_API_KEY`: traces appear at platform.openai.com/traces.
+- With Langfuse (free cloud tier at cloud.langfuse.com, or self-hosted): `uv sync --extra
+  tracing`, then put `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL`
+  in `.env`. Traces then go to Langfuse instead.
+- `AGENT_TRACING=off` records nothing. `AGENT_TRACE_CONTENT=off` keeps the steps but not
+  the text (job postings, your resume).
 
 ---
 
@@ -249,6 +298,10 @@ front doors to the same code.
 | `src/job_tracker/api.py` | Phase 7a: the web API | FastAPI, dependency injection, background tasks |
 | `src/job_tracker/runs.py` | Background runs shared by the API and MCP server | Threads, progress logging, one code path |
 | `src/job_tracker/mcp_server.py` | Phase 7c: the tracker as MCP tools | MCP, tool descriptions as prompts, tool annotations |
+| `src/job_tracker/search.py` | Phase 7d: LinkedIn guest search, page by page | Pagination, query filters |
+| `src/job_tracker/agent_team.py` | Phase 7d: job hunter + CV reviewer agents, budget guardrail | Agent loop, MCP tools for agents, agent-as-tool, tool guardrails, run context |
+| `src/job_tracker/agent_cli.py` | The `job-tracker-agent` command | Async entry points |
+| `src/job_tracker/tracing.py` | Phase 7d: where agent traces go | Tracing, OpenTelemetry, Langfuse |
 | `src/job_tracker/llm.py` | Phase 4: sends each description to Claude and gets back a validated `JobInsights` | Structured outputs, prompt rules against guessing, API error handling |
 | `src/job_tracker/scoring.py` | Phase 5: scores each job against `profile/` with a written rubric | Rubric prompts, LLM-as-judge, prompt caching |
 | `src/job_tracker/tailor.py` | Phase 6: writes a tailored resume, then fact-checks it | Generator + verifier, grounding with source quotes, deterministic checks |
@@ -261,6 +314,19 @@ columns exactly as the last sync wrote them. If the Sheet differs from the snaps
 edited it there, so the Sheet wins (clearing a cell counts). If the Sheet still matches
 the snapshot, the database's value wins (e.g. you changed it through the API). This is
 called a three-way merge: base (snapshot), theirs (Sheet), ours (database).
+
+**How an agent run works.** The hunter is an LLM in a loop: it gets your goal and a list
+of tools (name, inputs, description), picks one, our code runs it, the answer goes back
+into the conversation, and it picks again until it writes the shortlist. Our MCP server
+is started as a child process (`python -m job_tracker.mcp_server`) and the SDK talks to it
+over stdin/stdout, exactly like Claude Desktop does. Before every tool call, a *tool input
+guardrail* (`budget_guard`) checks the call against a budget object that lives in our
+process (the *run context*); over budget, the call is replaced by a "Not done (budget)"
+message. And once a tool's budget is used up, a *dynamic tool filter* removes it from the
+list the model sees (lesson from the first live run: told "no" in words, the model retried
+a refused call 50 times; a tool it can't see, it can't call). The reviewer is a second agent wrapped as a tool (`review_resume`), so the hunter
+gets a structured verdict back without seeing the reviewer's own steps. After the run,
+code checks that every shortlisted job ID really exists.
 
 **Why the LinkedIn fetch is careful:** LinkedIn's terms forbid scraping and it blocks bots.
 This tool only reads *public, logged-out* job pages, waits 3 to 7 seconds between
@@ -283,6 +349,12 @@ changes.
   real page as a new test fixture, fix the selectors in `extract.py`, re-run `uv run pytest`.
 - **New API endpoint:** add a function in `create_app()` in `api.py` that calls the
   package, plus a test in `tests/test_phase7a.py` using `TestClient` and the fake services.
+- **New agent tool:** add it to the MCP server (then Claude Desktop gets it too) and to
+  `HUNTER_TOOLS` in `agent_team.py`; if it costs money, add a rule in `HuntBudget.charge`.
+  Test agents with the SDK's `ScriptedModel` (see `tests/test_phase7d.py`): you write the
+  model's answers, so the test checks your code, not the model's mood.
+- **Another model for the agents:** `AGENT_MODEL=<any OpenAI model name>`, or
+  `uv add "openai-agents[litellm]"` and `AGENT_MODEL=litellm/anthropic/claude-sonnet-5-5`.
 - **Changing a table's columns:** `create_all` only creates missing tables. Delete
   `tracker.db` and re-import from `jobs.json`, or (better, later) add Alembic migrations.
 
@@ -301,7 +373,7 @@ MCP server (7c) ─┘
 Agents (7d, OpenAI Agents SDK) use the MCP tools; RAG (7e) adds search by meaning
 ```
 
-Done: 7a (database, API) and 7c (MCP tools). Next: 7d adds agents and tracing, 7e adds RAG, and 7b (later) a React + TypeScript UI generated from FastAPI's
+Done: 7a (database, API), 7c (MCP tools) and 7d (search, agents, tracing). Next: 7e adds RAG, and 7b (later) a React + TypeScript UI generated from FastAPI's
 OpenAPI schema.
 
 ---
@@ -313,6 +385,7 @@ job-tracker/
 ├── pyproject.toml        dependencies + the job-tracker command
 ├── .env.example          settings template (copy to .env)
 ├── urls.txt              your input list
+├── searches.example.txt  saved LinkedIn searches (copy to searches.txt)
 ├── tracker.db            the database (git-ignored; created on first run)
 ├── profile/              your resume + preferences (git-ignored; see profile.example/)
 ├── src/job_tracker/      the package (see Level 2)
