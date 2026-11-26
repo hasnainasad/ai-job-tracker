@@ -15,9 +15,7 @@ How it fits together:
     documents everything automatically.
 """
 import os
-from collections.abc import Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -29,80 +27,19 @@ from sqlmodel import Session, select
 
 from . import db
 from .db import RunRow
-from .models import Job
+from .models import Job, JobSummary
+from .runs import (
+    Services,
+    add_work,
+    create_run,
+    execute_run,
+    score_work,
+    sheet_work,
+    tailor_work,
+)
 from .storage import USER_COLUMNS
 
-# ---------------------------------------------------------------- services
-# The things that talk to the outside world, behind small factories. Tests swap them
-# for fakes, so they run without LinkedIn, Claude or Google.
-
-
-def _fetcher():
-    from .fetchers import make_fetcher
-
-    return make_fetcher(None)
-
-
-def _extractor():
-    from .llm import make_extractor
-
-    return make_extractor()
-
-
-def _scorer(profile_dir: str):
-    from .scoring import make_scorer
-
-    return make_scorer(profile_dir)
-
-
-def _tailor(profile_dir: str):
-    from .tailor import make_tailor
-
-    return make_tailor(profile_dir)
-
-
-def _worksheet():
-    from .sheet_sync import open_worksheet
-
-    return open_worksheet(
-        os.environ["GOOGLE_SHEET_ID"], os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
-    )
-
-
-@dataclass
-class Services:
-    fetcher: Callable = _fetcher
-    extractor: Callable = _extractor
-    scorer: Callable = _scorer
-    tailor: Callable = _tailor
-    worksheet: Callable = _worksheet
-    profile_dir: str = "profile"
-    resumes_dir: str = "output/resumes"
-
-
 # ---------------------------------------------------------------- request / response shapes
-
-class JobSummary(BaseModel):
-    """The short form used in lists (no description, no full AI output)."""
-    job_id: str
-    title: str
-    company: str
-    location: str
-    salary: str
-    status: str
-    fit_score: str
-    recommendation: str = ""
-    best_template: str = ""
-    resume_status: str
-    date_applied: str
-    url: str
-
-    @classmethod
-    def of(cls, job: Job) -> "JobSummary":
-        fit = job.fit
-        return cls(**job.model_dump(include=set(cls.model_fields)),
-                   recommendation=fit.recommendation if fit else "", best_template=fit.best_template if fit else "")
-
 
 class JobUpdate(BaseModel):
     """Your columns. Send only the ones you want to change."""
@@ -172,11 +109,8 @@ def create_app(engine=None, services: Services | None = None) -> FastAPI:
         return request.app.state.services
 
     def start_run(request: Request, s: Session, background: BackgroundTasks, kind: str, params: dict,
-                  work: Callable) -> Run:
-        row = RunRow(kind=kind, params=params)
-        s.add(row)
-        s.commit()
-        s.refresh(row)
+                  work) -> Run:
+        row = create_run(s, kind, params)
         background.add_task(execute_run, request.app.state.engine, row.id, work)
         return Run.model_validate(row, from_attributes=True)
 
@@ -213,60 +147,21 @@ def create_app(engine=None, services: Services | None = None) -> FastAPI:
     @app.post("/jobs", response_model=Run, status_code=202, tags=["jobs"])
     def add_jobs(s: SessionDep, body: AddJobs, request: Request, background: BackgroundTasks):
         """Add LinkedIn job URLs. Starts a background run; check it at /runs/{id}."""
-        svc = services_of(request)
-
-        def work(ws: Session, log) -> list[str]:
-            from .pipeline import run
-
-            result = run(
-                body.urls,
-                fetcher=svc.fetcher(),
-                extractor=svc.extractor() if body.ai else None,
-                scorer=svc.scorer(svc.profile_dir) if body.score else None,
-                on_progress=log,
-                known_ids=set() if body.refresh else db.known_ids(ws),
-            )
-            for f in result.failed:
-                log(f"failed: {f.url}: {f.error}")
-            db.upsert_jobs(ws, result.jobs)
-            return [j.job_id for j in result.jobs]
-
+        work = add_work(services_of(request), body.urls, body.ai, body.score, body.refresh)
         return start_run(request, s, background, "add", body.model_dump(), work)
 
     @app.post("/jobs/{job_id}/score", response_model=Run, status_code=202, tags=["jobs"])
     def score_job(s: SessionDep, job_id: str, request: Request, background: BackgroundTasks, ai: bool = False):
         """Score (or re-score) one saved job. ai=true also re-reads the description first."""
         _require(s, job_id)
-        svc = services_of(request)
-
-        def work(ws: Session, log) -> list[str]:
-            from .pipeline import enrich
-
-            job = db.get_job(ws, job_id)
-            enrich([job], svc.extractor() if ai else None, svc.scorer(svc.profile_dir), on_progress=log)
-            db.upsert_jobs(ws, [job])
-            return [job_id]
-
+        work = score_work(services_of(request), job_id, ai)
         return start_run(request, s, background, "score", {"job_id": job_id, "ai": ai}, work)
 
     @app.post("/jobs/{job_id}/tailor", response_model=Run, status_code=202, tags=["resumes"])
     def tailor(s: SessionDep, job_id: str, request: Request, background: BackgroundTasks, template: str | None = None):
         """Write a tailored PDF resume for one saved job (uses API credit)."""
         _require(s, job_id)
-        svc = services_of(request)
-
-        def work(ws: Session, log) -> list[str]:
-            from .tailor import tailor_job
-
-            job = db.get_job(ws, job_id)
-            result = tailor_job(job, svc.tailor(svc.profile_dir), out_dir=svc.resumes_dir,
-                                template=template, on_progress=log)
-            db.add_resume(ws, job_id, result)
-            db.upsert_jobs(ws, [job])
-            for w in result.warnings:
-                log(f"check: {w}")
-            return [job_id]
-
+        work = tailor_work(services_of(request), job_id, template)
         return start_run(request, s, background, "tailor", {"job_id": job_id, "template": template}, work)
 
     @app.get("/jobs/{job_id}/resume", tags=["resumes"], response_class=FileResponse)
@@ -282,14 +177,7 @@ def create_app(engine=None, services: Services | None = None) -> FastAPI:
     @app.post("/sync/sheet", response_model=Run, status_code=202, tags=["sheet"])
     def sync(s: SessionDep, request: Request, background: BackgroundTasks):
         """Two-way Google Sheet sync: pull your edits, then push changed cells."""
-        svc = services_of(request)
-
-        def work(ws: Session, log) -> list[str]:
-            from .sheet_sync import sync_sheet
-
-            plan = sync_sheet(ws, svc.worksheet(), on_progress=log)
-            return list(plan.pulled)
-
+        work = sheet_work(services_of(request))
         return start_run(request, s, background, "sheet", {}, work)
 
     @app.get("/runs", response_model=list[Run], tags=["runs"])
@@ -310,28 +198,6 @@ def create_app(engine=None, services: Services | None = None) -> FastAPI:
 def _require(s: Session, job_id: str) -> None:
     if s.get(db.JobRow, job_id) is None:
         raise HTTPException(404, f"job {job_id} not found")
-
-
-def execute_run(engine, run_id: int, work: Callable) -> None:
-    """Runs in the background: does the work, saving each progress line as it happens."""
-    with Session(engine) as s:
-        row = s.get(RunRow, run_id)
-        row.status = "running"
-        s.commit()
-
-        def log(line: str) -> None:
-            row.log = [*row.log, line.strip()]  # a new list, so the JSON column notices the change
-            s.commit()
-
-        try:
-            row.job_ids = work(s, log) or []
-            row.status = "done"
-        except Exception as e:  # noqa: BLE001 - the run records the error instead of crashing the server
-            s.rollback()
-            row.status = "failed"
-            row.error = str(e)
-        row.finished_at = db.now()
-        s.commit()
 
 
 app = create_app()

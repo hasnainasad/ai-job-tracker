@@ -3,7 +3,7 @@
 Paste LinkedIn job links, get a clean tracker of those jobs (JSON, CSV and a Google Sheet).
 Later phases add LLM fit scoring, resume tailoring, and a React + FastAPI app with agents.
 
-**Status:** phases 0 to 6 working live (fetch, Google Sheet, AI extraction, fit scoring, resume tailoring). Phase 7a (database + web API) built.
+**Status:** phases 0 to 6 working live (fetch, Google Sheet, AI extraction, fit scoring, resume tailoring). Phase 7a (database + web API) working. Phase 7c (MCP server for Claude Desktop) built.
 
 ---
 
@@ -28,7 +28,7 @@ cp .env.example .env
 **3. Check it works:**
 
 ```bash
-uv run pytest      # should say "29 passed"
+uv run pytest      # should say "33 passed"
 ```
 
 **4. Add some jobs and run it.** Open `urls.txt`, paste 3 to 5 LinkedIn job links (one per
@@ -179,6 +179,50 @@ Adding, scoring, tailoring and syncing take a while, so they reply at once with 
 server listens on your Mac only (127.0.0.1), so nothing is exposed to your network. The
 CLI and the API can run at the same time; they share `tracker.db`.
 
+**10. Use it from Claude Desktop (phase 7c, MCP).** Ask Claude things like "which of my
+Apply jobs have no tailored resume yet?" or "mark the Pigment job as applied today".
+
+1. Find where `uv` is: run `which uv` (e.g. `/Users/you/.local/bin/uv`). Claude Desktop
+   doesn't see your Terminal's PATH, so it needs the full path.
+2. In Claude Desktop: *Settings → Developer → Edit Config*. This opens
+   `~/Library/Application Support/Claude/claude_desktop_config.json`. Add (keep any
+   servers already there, and use your own paths):
+
+```json
+{
+  "mcpServers": {
+    "job-tracker": {
+      "command": "/Users/you/.local/bin/uv",
+      "args": ["--directory", "/Users/you/path/to/ai-job-tracker", "run", "job-tracker-mcp"]
+    }
+  }
+}
+```
+
+3. Quit Claude Desktop completely (Cmd+Q) and reopen it. The job-tracker tools appear
+   under the tools/connectors button in the chat box.
+
+| Tool | Does | Cost |
+| --- | --- | --- |
+| `list_jobs` | Jobs with filters (status, recommendation, min fit) | Free |
+| `get_job` | One job in full, plus its latest tailored resume | Free |
+| `update_job` | Change your columns (status, notes, date applied...) | Free |
+| `run_status` | Progress of a slow tool call | Free |
+| `sync_sheet` | Two-way Google Sheet sync | Free |
+| `add_jobs` | Add LinkedIn URLs (`ai` / `score` optional) | API credit if `ai`/`score` |
+| `score_job` | Score or re-score one job | ~2 to 5 cents |
+| `tailor_resume` | Tailored PDF resume | ~10 to 15 cents |
+
+Claude Desktop asks before each tool call the first time (you can allow a tool for the
+whole chat). The tool descriptions tell Claude to confirm paid tools with you. Slow tools
+wait up to 45 seconds (`MCP_WAIT_SECONDS`), then hand back a run ID that Claude checks
+with `run_status`. If the tools don't show up, look at *Settings → Developer* for the
+error, or the log in `~/Library/Logs/Claude/mcp-server-job-tracker.log`.
+
+Optional, to poke at the tools without Claude: `npx @modelcontextprotocol/inspector`
+(needs Node.js), then connect with command `uv` and arguments
+`--directory /path/to/ai-job-tracker run job-tracker-mcp`.
+
 ---
 
 ## Level 2: How it works (intermediate)
@@ -190,7 +234,8 @@ urls.txt ──► urls.py ──► fetchers.py ──► extract.py ──► 
             job IDs      raw HTML        parsed fields   validated     tracker.db  Google Sheet
 ```
 
-The CLI (`cli.py`) and the web API (`api.py`) are two thin front doors to the same code.
+The CLI (`cli.py`), the web API (`api.py`) and the MCP server (`mcp_server.py`) are thin
+front doors to the same code.
 
 | File | Job | Concept to learn |
 | --- | --- | --- |
@@ -202,6 +247,8 @@ The CLI (`cli.py`) and the web API (`api.py`) are two thin front doors to the sa
 | `src/job_tracker/db.py` | Phase 7a: the `tracker.db` database (jobs, runs, resumes) | SQL databases, SQLModel, upserts |
 | `src/job_tracker/sheet_sync.py` | Phase 7a: two-way Google Sheet sync, only changed cells | Three-way merge, batch writes via `gspread` |
 | `src/job_tracker/api.py` | Phase 7a: the web API | FastAPI, dependency injection, background tasks |
+| `src/job_tracker/runs.py` | Background runs shared by the API and MCP server | Threads, progress logging, one code path |
+| `src/job_tracker/mcp_server.py` | Phase 7c: the tracker as MCP tools | MCP, tool descriptions as prompts, tool annotations |
 | `src/job_tracker/llm.py` | Phase 4: sends each description to Claude and gets back a validated `JobInsights` | Structured outputs, prompt rules against guessing, API error handling |
 | `src/job_tracker/scoring.py` | Phase 5: scores each job against `profile/` with a written rubric | Rubric prompts, LLM-as-judge, prompt caching |
 | `src/job_tracker/tailor.py` | Phase 6: writes a tailored resume, then fact-checks it | Generator + verifier, grounding with source quotes, deterministic checks |
@@ -254,8 +301,7 @@ MCP server (7c) ─┘
 Agents (7d, OpenAI Agents SDK) use the MCP tools; RAG (7e) adds search by meaning
 ```
 
-Next: 7c exposes these functions as MCP tools for Claude Desktop, 7d adds agents and
-tracing, 7e adds RAG, and 7b (later) a React + TypeScript UI generated from FastAPI's
+Done: 7a (database, API) and 7c (MCP tools). Next: 7d adds agents and tracing, 7e adds RAG, and 7b (later) a React + TypeScript UI generated from FastAPI's
 OpenAPI schema.
 
 ---

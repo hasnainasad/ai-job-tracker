@@ -8,8 +8,9 @@ from sqlmodel import Session
 from test_tracker import MASTER, SAMPLE, _fit, _tailored
 
 from job_tracker import db
-from job_tracker.api import Services, create_app
+from job_tracker.api import create_app
 from job_tracker.models import Job, JobInsights
+from job_tracker.runs import Services
 from job_tracker.sheet_sync import plan_sheet_sync, sync_sheet
 from job_tracker.storage import COLUMNS
 

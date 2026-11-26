@@ -136,6 +136,28 @@ class RunResult(BaseModel):
     known: list[str] = []  # job IDs skipped because they were already saved
 
 
+class JobSummary(BaseModel):
+    """The short form used in lists (no description, no full AI output)."""
+    job_id: str
+    title: str
+    company: str
+    location: str
+    salary: str
+    status: str
+    fit_score: str
+    recommendation: str = ""
+    best_template: str = ""
+    resume_status: str
+    date_applied: str
+    url: str
+
+    @classmethod
+    def of(cls, job: Job) -> "JobSummary":
+        fit = job.fit
+        return cls(**job.model_dump(include=set(cls.model_fields)),
+                   recommendation=fit.recommendation if fit else "", best_template=fit.best_template if fit else "")
+
+
 def load_job(data: dict) -> Job:
     """Load one saved job, coping with data written by an older version of the tool.
 
