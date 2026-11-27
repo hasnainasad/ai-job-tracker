@@ -48,7 +48,7 @@ def test_tools_are_listed_with_safety_hints(server):
             return {t.name: t for t in (await client.list_tools()).tools}
     tools = anyio.run(go)
     assert set(tools) == {"list_jobs", "get_job", "update_job", "add_jobs", "score_job", "tailor_resume",
-                          "sync_sheet", "run_status", "search_jobs"}
+                          "sync_sheet", "run_status", "search_jobs", "find_jobs", "similar_jobs", "resume_evidence"}
     assert tools["list_jobs"].annotations.read_only_hint is True
     assert tools["tailor_resume"].annotations.read_only_hint is False
     assert "credit" in tools["tailor_resume"].description

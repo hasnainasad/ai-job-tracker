@@ -3,7 +3,7 @@
 Paste LinkedIn job links, get a clean tracker of those jobs (JSON, CSV and a Google Sheet).
 Later phases add LLM fit scoring, resume tailoring, and a React + FastAPI app with agents.
 
-**Status:** phases 0 to 6 working live (fetch, Google Sheet, AI extraction, fit scoring, resume tailoring). Phase 7a (database + web API) working. Phase 7c (MCP server for Claude Desktop) working. Phase 7d (LinkedIn search, job hunter and CV reviewer agents, tracing) built.
+**Status:** phases 0 to 6 working live (fetch, Google Sheet, AI extraction, fit scoring, resume tailoring). Phase 7a (database + web API) working. Phase 7c (MCP server for Claude Desktop) working. Phase 7d (LinkedIn search, job hunter and CV reviewer agents, tracing) working. Phase 7e (search by meaning, RAG) built.
 
 ---
 
@@ -28,7 +28,7 @@ cp .env.example .env
 **3. Check it works:**
 
 ```bash
-uv run pytest      # should say "44 passed"
+uv run pytest      # should say "53 passed"
 ```
 
 **4. Add some jobs and run it.** Open `urls.txt`, paste 3 to 5 LinkedIn job links (one per
@@ -169,6 +169,8 @@ The `/docs` page lists every endpoint. Click one, then **Try it out**, then **Ex
 | `PATCH /jobs/{job_id}` | Edit your columns, e.g. `{"status": "Applied", "date_applied": "2026-11-26"}` |
 | `POST /jobs` | Add URLs: `{"urls": [...], "ai": true, "score": true}` |
 | `POST /jobs/search` | Search LinkedIn and add new jobs: `{"keywords": "react lead", "location": "London", "score": true}` |
+| `GET /jobs/find?q=...` | Your saved jobs by meaning |
+| `GET /jobs/{job_id}/similar` | Saved jobs most like this one |
 | `POST /jobs/{job_id}/score` | Score or re-score one job |
 | `POST /jobs/{job_id}/tailor` | Tailored PDF resume (`?template=D` to force one, `?feedback=...` to revise) |
 | `GET /jobs/{job_id}/resume` | Download the latest tailored PDF |
@@ -209,6 +211,9 @@ Apply jobs have no tailored resume yet?" or "mark the Pigment job as applied tod
 | `get_job` | One job in full, plus its latest tailored resume | Free |
 | `update_job` | Change your columns (status, notes, date applied...) | Free |
 | `search_jobs` | Search LinkedIn (keywords, location, days, workplace); adds nothing | Free |
+| `find_jobs` | Your saved jobs by meaning ("fintech roles with design-system work") | Fraction of a cent |
+| `similar_jobs` | Saved jobs most like one job | Fraction of a cent |
+| `resume_evidence` | Per job requirement, your closest master resume bullets | Fraction of a cent |
 | `run_status` | Progress of a slow tool call | Free |
 | `sync_sheet` | Two-way Google Sheet sync | Free |
 | `add_jobs` | Add LinkedIn URLs (`ai` / `score` optional) | API credit if `ai`/`score` |
@@ -272,6 +277,34 @@ each model call, each tool call with its inputs and answer, timings and tokens.
 - `AGENT_TRACING=off` records nothing. `AGENT_TRACE_CONTENT=off` keeps the steps but not
   the text (job postings, your resume).
 
+**14. Search your saved jobs by meaning (phase 7e, RAG).** Normal search matches words;
+this matches meaning, so "first engineering hire at an AI startup" finds a "Founding
+Engineer" posting that never says "first hire".
+
+```bash
+uv run job-tracker --find "fintech roles with design-system work"   # best matches first
+uv run job-tracker --like 4484482518                                # saved jobs most like this one
+uv run job-tracker --evidence 4484482518    # per requirement, your closest resume bullets
+uv run job-tracker --eval-search evals/search.jsonl                 # how good is search? (see below)
+```
+
+Each result shows a similarity score (0 to 1), the job's fit score and the passage that
+matched. The first run embeds all your jobs and your master resume (a fraction of a cent
+with `OPENAI_API_KEY`); after that, only new or changed jobs are embedded, automatically,
+before each search. The index lives in `chroma/` (git-ignored); `--reindex` rebuilds it.
+The same search is in Claude Desktop (`find_jobs`, `similar_jobs`, `resume_evidence`), the
+API, and the job hunter (it finds matching saved jobs in one call). The CV reviewer now
+also gets, for each job requirement, your best-matching resume bullets.
+
+To run it locally and free instead: install Ollama, `ollama pull nomic-embed-text`, set
+`EMBED_PROVIDER=ollama` in `.env`, then `--reindex`.
+
+**Is search any good?** `evals/search.jsonl` has 12 questions about your saved jobs, in
+different words from their titles, with the jobs each should find. `--eval-search` prints
+hit@5 (share of questions where a right job is in the top 5), recall and MRR (how high
+the first right job ranks). Run it before and after a change and compare. Add your own
+questions as you save more jobs.
+
 ---
 
 ## Level 2: How it works (intermediate)
@@ -302,6 +335,9 @@ front doors to the same code.
 | `src/job_tracker/agent_team.py` | Phase 7d: job hunter + CV reviewer agents, budget guardrail | Agent loop, MCP tools for agents, agent-as-tool, tool guardrails, run context |
 | `src/job_tracker/agent_cli.py` | The `job-tracker-agent` command | Async entry points |
 | `src/job_tracker/tracing.py` | Phase 7d: where agent traces go | Tracing, OpenTelemetry, Langfuse |
+| `src/job_tracker/embeddings.py` | Phase 7e: text to vectors (OpenAI or Ollama) | Embeddings, cosine similarity |
+| `src/job_tracker/rag.py` | Phase 7e: chunking, the Chroma index, search, resume evidence | Chunking, vector stores, retrieval, max-pooling |
+| `src/job_tracker/search_eval.py` | Phase 7e: scores search on a question set | Retrieval metrics: hit@k, recall, MRR |
 | `src/job_tracker/llm.py` | Phase 4: sends each description to Claude and gets back a validated `JobInsights` | Structured outputs, prompt rules against guessing, API error handling |
 | `src/job_tracker/scoring.py` | Phase 5: scores each job against `profile/` with a written rubric | Rubric prompts, LLM-as-judge, prompt caching |
 | `src/job_tracker/tailor.py` | Phase 6: writes a tailored resume, then fact-checks it | Generator + verifier, grounding with source quotes, deterministic checks |
@@ -327,6 +363,16 @@ list the model sees (lesson from the first live run: told "no" in words, the mod
 a refused call 50 times; a tool it can't see, it can't call). The reviewer is a second agent wrapped as a tool (`review_resume`), so the hunter
 gets a structured verdict back without seeing the reviewer's own steps. After the run,
 code checks that every shortlisted job ID really exists.
+
+**How search by meaning works (RAG).** Each job is cut into *chunks*: one with its key facts
+(title, company, summary, skills, work mode), then its posting in ~1,200-character slices
+that overlap a little, so no sentence is lost at a cut. Your master resume is cut bullet
+by bullet, each remembering its role. Every chunk becomes an *embedding* and goes into
+Chroma. A question is embedded the same way and Chroma returns the nearest chunks
+(cosine similarity). A job's score is its best chunk, so one relevant paragraph in a long
+posting counts. A content hash per job tells which jobs changed, so only those are
+re-embedded. RAG's "augmented generation" part is the reviewer: instead of the whole
+resume and hoping, it gets the evidence that matters per requirement.
 
 **Why the LinkedIn fetch is careful:** LinkedIn's terms forbid scraping and it blocks bots.
 This tool only reads *public, logged-out* job pages, waits 3 to 7 seconds between
@@ -373,7 +419,7 @@ MCP server (7c) ─┘
 Agents (7d, OpenAI Agents SDK) use the MCP tools; RAG (7e) adds search by meaning
 ```
 
-Done: 7a (database, API), 7c (MCP tools) and 7d (search, agents, tracing). Next: 7e adds RAG, and 7b (later) a React + TypeScript UI generated from FastAPI's
+Done: 7a (database, API), 7c (MCP tools), 7d (search, agents, tracing) and 7e (RAG). Next: 7b, a React + TypeScript UI generated from FastAPI's
 OpenAPI schema.
 
 ---
@@ -387,6 +433,8 @@ job-tracker/
 ├── urls.txt              your input list
 ├── searches.example.txt  saved LinkedIn searches (copy to searches.txt)
 ├── tracker.db            the database (git-ignored; created on first run)
+├── chroma/               the search index (git-ignored; rebuilt with --reindex)
+├── evals/search.jsonl    questions for --eval-search
 ├── profile/              your resume + preferences (git-ignored; see profile.example/)
 ├── src/job_tracker/      the package (see Level 2)
 └── tests/                pytest tests + a saved sample job page

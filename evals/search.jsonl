@@ -1,0 +1,15 @@
+# Search-by-meaning eval (phase 7e): uv run job-tracker --eval-search evals/search.jsonl
+# Each line: a question in your own words, and the saved job IDs a good search should return.
+# The questions avoid the jobs' exact titles on purpose: that is what "by meaning" has to handle.
+{"query": "building trading screens for a quant fund or trading fintech", "expect": ["4492697237", "4492348794"]}
+{"query": "managing a team of frontend engineers", "expect": ["4487065297", "4484482518"]}
+{"query": "first engineering hire at an early AI startup with equity", "expect": ["4467364933", "4492085029"]}
+{"query": "frontend lead on Adobe Experience Manager sites", "expect": ["4493620716", "4492603884"]}
+{"query": "protecting people from fraud and money laundering", "expect": ["4494110438"]}
+{"query": "UI engineering for a tier one investment bank", "expect": ["4494905103"]}
+{"query": "public sector service helping people with money and pensions", "expect": ["4492806464"]}
+{"query": "AI platform for procurement and supply chains", "expect": ["4492600263"]}
+{"query": "owning front-end architecture, component libraries and UI guidelines", "expect": ["4495244928"]}
+{"query": "real-time software for automated physical environments", "expect": ["4493412689", "4493410841"]}
+{"query": "internal business systems at an AI safety lab", "expect": ["4485792408"]}
+{"query": "leading a data platform squad at a large bank", "expect": ["4494485419"]}

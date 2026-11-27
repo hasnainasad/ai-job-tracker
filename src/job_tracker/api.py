@@ -140,6 +140,27 @@ def create_app(engine=None, services: Services | None = None) -> FastAPI:
                             limit=limit, offset=offset)
         return [JobSummary.of(j) for j in jobs]
 
+    def index_of(request: Request, s: Session):
+        if getattr(request.app.state, "index", None) is None:
+            try:
+                request.app.state.index = services_of(request).index()
+            except RuntimeError as e:
+                raise HTTPException(503, str(e)) from e
+        idx = request.app.state.index
+        idx.refresh(s, services_of(request).profile_dir)
+        return idx
+
+    @app.get("/jobs/find", tags=["search"])
+    def find(s: SessionDep, request: Request, q: str, limit: int = 10):
+        """Your saved jobs by meaning, e.g. q=fintech roles with design-system work."""
+        return [h.__dict__ for h in index_of(request, s).find_jobs(q, limit)]
+
+    @app.get("/jobs/{job_id}/similar", tags=["search"])
+    def similar(s: SessionDep, request: Request, job_id: str, limit: int = 5):
+        """Saved jobs most like this one."""
+        _require(s, job_id)
+        return [h.__dict__ for h in index_of(request, s).similar_jobs(job_id, limit)]
+
     @app.get("/jobs/{job_id}", response_model=Job, tags=["jobs"])
     def get_job(s: SessionDep, job_id: str):
         job = db.get_job(s, job_id)

@@ -50,6 +50,12 @@ def _tailor(profile_dir: str):
     return make_tailor(profile_dir)
 
 
+def _index():
+    from .rag import open_index
+
+    return open_index()
+
+
 def _worksheet():
     from .sheet_sync import open_worksheet
 
@@ -65,6 +71,7 @@ class Services:
     scorer: Callable = _scorer
     tailor: Callable = _tailor
     worksheet: Callable = _worksheet
+    index: Callable = _index
     profile_dir: str = "profile"
     resumes_dir: str = "output/resumes"
 

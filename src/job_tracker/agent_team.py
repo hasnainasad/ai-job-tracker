@@ -56,7 +56,7 @@ from .urls import extract_job_id
 # Rough cost per call, in US cents, so the agent's report can say what a hunt spent.
 COST_CENTS = {"ai": 1.5, "score": 3.5, "tailor": 12.5}
 # No score_job: add_jobs(score=true) scores new jobs, and re-scoring saved ones is your call, not the agent's.
-HUNTER_TOOLS = ["search_jobs", "list_jobs", "get_job", "add_jobs", "tailor_resume", "run_status"]
+HUNTER_TOOLS = ["search_jobs", "find_jobs", "list_jobs", "get_job", "add_jobs", "tailor_resume", "run_status"]
 
 
 def agent_model() -> str | None:
@@ -185,7 +185,9 @@ class ReviewNotes(BaseModel):
 REVIEWER_RULES = """You review ONE tailored resume for ONE job, like a sharp recruiter for that role.
 Call resume_context(job_id) first. Then judge:
 - Does the headline, summary and first bullets speak to this job's top requirements?
-- Is strong evidence from the master resume missing, buried, or out of order?
+- Is strong evidence from the master resume missing, buried, or out of order? The
+  requirement_evidence section lists, per requirement, the closest master resume bullets:
+  a high-scoring bullet that isn't on the tailored resume is a strong revision point.
 - Any filler, repetition, or wording a recruiter would skim past?
 Rules:
 - Only suggest facts that ARE in the master resume. Never ask for new skills, numbers or results.
@@ -194,7 +196,7 @@ Rules:
   the writer can apply in one pass (max 6 short, concrete instructions)."""
 
 
-def resume_context(job_id: str, engine=None, profile_dir: str = "profile") -> str:
+def resume_context(job_id: str, engine=None, profile_dir: str = "profile", index=None) -> str:
     """Everything the reviewer needs about one job's latest tailored resume, as text."""
     engine = engine or db.make_engine()
     with Session(engine) as s:
@@ -211,6 +213,15 @@ def resume_context(job_id: str, engine=None, profile_dir: str = "profile") -> st
     fit = job.fit
     tips = (f"fit {fit.fit_score}, {fit.recommendation}; strengths: {'; '.join(fit.key_strengths)}; "
             f"gaps: {'; '.join(fit.key_gaps)}; tips: {'; '.join(fit.tailoring_tips)}") if fit else "(not scored)"
+    evidence = ""
+    try:  # phase 7e: per requirement, the closest master resume bullets (RAG)
+        from .rag import evidence_text, open_index, requirement_evidence
+
+        idx = index or open_index()
+        idx.index_resume(master)
+        evidence = evidence_text(requirement_evidence(idx, job))
+    except Exception as e:  # noqa: BLE001 - the review still works without it
+        evidence = f"(not available: {e})"
     return (
         f"<job id='{job.job_id}'>{job.title} @ {job.company} ({job.location})</job>\n"
         f"<fit_assessment>{tips}</fit_assessment>\n"
@@ -218,15 +229,18 @@ def resume_context(job_id: str, engine=None, profile_dir: str = "profile") -> st
         f"{job.description[:6000]}\n</job_posting>\n"
         f"<tailored_resume template='{resume.template}' automatic_check_warnings='{len(resume.warnings)}'>\n"
         f"{tailored}\n</tailored_resume>\n"
+        f"<requirement_evidence note='per job requirement, the closest master resume bullets, "
+        f"similarity 0-1'>\n{evidence}\n</requirement_evidence>\n"
         f"<master_resume>\n{master}\n</master_resume>"
     )
 
 
-def make_reviewer(model=None, engine=None, profile_dir: str = "profile") -> Agent:
+def make_reviewer(model=None, engine=None, profile_dir: str = "profile", index=None) -> Agent:
     @function_tool(name_override="resume_context")
     def resume_context_tool(job_id: str) -> str:
-        """The job, its fit assessment, the latest tailored resume and the master resume."""
-        return resume_context(job_id, engine, profile_dir)
+        """The job, its fit assessment, the latest tailored resume, resume evidence per
+        requirement, and the master resume."""
+        return resume_context(job_id, engine, profile_dir, index)
 
     return Agent(name="CV reviewer", instructions=REVIEWER_RULES, tools=[resume_context_tool],
                  output_type=ReviewNotes, model=model or agent_model())
@@ -264,8 +278,8 @@ Plan:
    Add them in ONE add_jobs(urls, ai=true, score=true) call; that also scores them. Budget: at
    most {b.max_new_jobs} new jobs in this hunt. Prefer fewer, better picks. Don't re-score saved jobs.
 3. If a tool answers status "running", call run_status(run_id, wait=40) until it is done.
-4. Call list_jobs once: it has every saved job's title, company, location, fit_score and
-   recommendation. Include saved jobs that match the goal. Use get_job only if you need detail
+4. Call find_jobs once with the goal: it returns SAVED jobs that match by meaning (including
+   older ones), with fit scores. Call list_jobs once if you also need recommendations. Use get_job only if you need detail
    on a final candidate (at most {b.max_lookups} calls). Shortlist recommendation Apply or a high
    fit_score, best first, then write your answer straight away.
 5. {tailoring}

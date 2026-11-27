@@ -16,3 +16,5 @@ output/
 tracker.db
 tracker.db-wal
 tracker.db-shm
+# The search index (phase 7e): rebuilt from tracker.db with --reindex
+chroma/

@@ -16,6 +16,7 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "mcp>=2.3",
     "openai-agents>=0.26",
+    "chromadb>=1.5",
 ]
 
 [project.scripts]

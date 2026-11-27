@@ -6,6 +6,7 @@ Things we've agreed to do later. Newest first within each section.
 
 | # | Item | Why | Added |
 | --- | --- | --- | --- |
+| 20 | **RAG next steps**: STAR stories in `profile/stories.md`, retrieved for interview prep (pairs with #16); evidence for the tailor too (today it already sees the whole master resume, so retrieval adds little there); hybrid search (meaning + exact keywords) if the eval shows misses on tool names | Phase 7e built search, similar jobs and reviewer evidence first | 2026-11-26 |
 | 19 | **Decide: `hunt --sheet`** to sync the Google Sheet once after a hunt (plain code after the agent finishes, not an agent tool). Today: run `uv run job-tracker --sheet` yourself | Hunted jobs land in tracker.db but not the Sheet; the hunter has no `sync_sheet` on purpose. To be decided | 2026-11-26 |
 | 17 | **Agent eval set**: a few fixed goals and tailored resumes with expected outcomes (right jobs shortlisted, reviewer catches planted problems), run after prompt or model changes | Agents change behaviour with every prompt tweak; the scripted tests only check our code | 2026-11-26 |
 | 18 | **Tracing for the non-agent LLM calls** (`--ai`, `--score`, `--tailor` on Anthropic): send them to Langfuse too | 7d traces the agents only | 2026-11-26 |

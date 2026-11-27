@@ -8,6 +8,8 @@ database); jobs.json and jobs.csv are written after each run as exports.
   uv run job-tracker --tailor 4492071444 --sheet tailored PDF resume for a saved job
   uv run job-tracker --search "react lead" --location London --score   find jobs on LinkedIn, add new ones
   uv run job-tracker --searches searches.txt --list-only               just show what the searches find
+  uv run job-tracker --find "fintech roles with design-system work"   your saved jobs, by meaning
+  uv run job-tracker --like 4484482518                                saved jobs most like this one
   add --refresh to redo jobs you already have
 
 The first run moves jobs.json into the database automatically (or use --import-json).
@@ -96,11 +98,18 @@ def main():
     ap.add_argument("--limit", type=int, default=20, help="with --search: at most N results per search (default 20)")
     ap.add_argument("--workplace", help="with --search: remote, hybrid, onsite, or a list like remote,hybrid")
     ap.add_argument("--list-only", action="store_true", help="with --search: show results, add nothing")
+    ap.add_argument("--find", metavar="QUESTION", help="phase 7e: search your saved jobs by meaning")
+    ap.add_argument("--like", metavar="JOB_ID", help="phase 7e: saved jobs most similar to this one")
+    ap.add_argument("--evidence", metavar="JOB_ID", help="phase 7e: per requirement, your closest resume bullets")
+    ap.add_argument("--top", type=int, default=10, help="with --find/--like: how many results (default 10)")
+    ap.add_argument("--reindex", action="store_true", help="phase 7e: rebuild the search index from scratch")
+    ap.add_argument("--eval-search", metavar="FILE", help="phase 7e: score search on a question set (evals/)")
     ap.add_argument("--template", help="with --tailor: force a template letter (default: the scored best_template)")
     args = ap.parse_args()
     if not (args.urls_file or args.saved or args.tailor or args.sheet or args.import_json
-            or args.search or args.searches):
-        ap.error("give a urls file, --search, --searches, --saved, --sheet, --import-json or --tailor JOB_ID")
+            or args.search or args.searches or args.find or args.like or args.evidence or args.reindex
+            or args.eval_search):
+        ap.error("give a urls file, --search, --find, --saved, --sheet, --import-json or --tailor JOB_ID")
 
     engine = make_engine(db_url(args.db))
     with Session(engine) as session:
@@ -109,6 +118,8 @@ def main():
             print(f"Database: imported {n} job(s) from {args.out}")
         if args.tailor:
             return tailor_command(args, session)
+        if args.find or args.like or args.evidence or args.reindex or args.eval_search:
+            return rag_command(args, session)
         if args.search or args.searches:
             urls = search_command(args, session)
             if args.list_only:
@@ -144,6 +155,40 @@ def search_command(args, session: Session) -> list[str]:
                 new[h.job_id] = h.url
     print(f"{len(new)} new job(s) found")
     return list(new.values())
+
+
+def rag_command(args, session: Session) -> None:
+    from .rag import evidence_text, open_index, requirement_evidence
+
+    idx = open_index()
+    if args.reindex:
+        print(f"Index rebuilt: {idx.rebuild(session, args.profile)} job(s) embedded")
+    else:
+        n = idx.refresh(session, args.profile)
+        if n:
+            print(f"Index: {n} new or changed job(s) embedded")
+    hits = []
+    if args.find:
+        hits = idx.find_jobs(args.find, args.top)
+    elif args.like:
+        if get_job(session, args.like) is None:
+            raise SystemExit(f"job {args.like} is not saved")
+        hits = idx.similar_jobs(args.like, args.top)
+    for n, h in enumerate(hits, 1):
+        job = get_job(session, h.job_id)
+        fit = job.fit_score or "-"
+        print(f"{n:2}. {h.score:.2f}  [{fit:>3}] {h.title} @ {h.company}  id {h.job_id}  ({job.status})")
+        print(f"      {' '.join(h.text.split())[:140]}")
+    if args.evidence:
+        job = get_job(session, args.evidence)
+        if job is None:
+            raise SystemExit(f"job {args.evidence} is not saved")
+        print(f"Evidence for {job.title} @ {job.company}:")
+        print(evidence_text(requirement_evidence(idx, job)))
+    if args.eval_search:
+        from .search_eval import evaluate, load_cases, print_report
+
+        print_report(evaluate(idx, load_cases(args.eval_search)))
 
 
 def fetch_and_enrich(args, session: Session, urls: list[str] | None = None) -> None:
